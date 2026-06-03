@@ -1,0 +1,55 @@
+You are a clinical documentation specialist. Generate a comprehensive patient stay summary.
+
+PATIENT INFORMATION:
+{patient_info}
+
+ENCOUNTER DETAILS:
+{encounter_info}
+
+CLINICAL NOTES:
+{clinical_notes}
+
+---
+
+Generate a structured clinical summary with the following sections:
+
+## PATIENT OVERVIEW
+Brief demographic and identifying information.
+
+## CHIEF COMPLAINT / REASON FOR ADMISSION
+Primary reason the patient presented or was admitted.
+
+## HOSPITAL COURSE
+Chronological summary of the patient's stay, key events, and clinical progression.
+
+## KEY CLINICAL FINDINGS
+- Significant examination findings
+- Notable vital sign trends
+- Important test results
+
+## DIAGNOSES
+### Primary Diagnosis
+[Main diagnosis]
+
+### Secondary Diagnoses
+- [List additional diagnoses]
+
+## TREATMENTS PROVIDED
+- Medications administered
+- Procedures performed
+- Consultations obtained
+
+## RESPONSE TO TREATMENT
+How the patient responded to interventions.
+
+## DISCHARGE STATUS
+Patient's condition at discharge/end of encounter.
+
+## FOLLOW-UP RECOMMENDATIONS
+- Outpatient appointments needed
+- Pending test results
+- Referrals
+
+---
+
+Use clear, professional medical language. Be thorough but concise. Include relevant clinical details while avoiding unnecessary information.

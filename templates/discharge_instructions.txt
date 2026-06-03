@@ -1,0 +1,47 @@
+Generate patient-friendly discharge instructions.
+
+PATIENT: {patient_name}
+
+CLINICAL SUMMARY:
+{summary}
+
+DIAGNOSES:
+{diagnoses}
+
+TREATMENTS:
+{treatments}
+
+FOLLOW-UP NEEDED:
+{follow_up}
+
+---
+
+Create discharge instructions that are:
+- Written at a 6th-grade reading level
+- Clear and actionable
+- Free of unexplained medical jargon
+
+Include these sections:
+
+## WHAT HAPPENED DURING YOUR VISIT
+[Simple explanation of diagnosis and treatment]
+
+## YOUR MEDICATIONS
+[List medications with clear instructions]
+- Name of medication
+- How much to take
+- When to take it
+- What it's for
+
+## WHAT YOU CAN AND CANNOT DO
+[Activity restrictions and recommendations]
+
+## WARNING SIGNS - WHEN TO GET HELP
+Call your doctor or go to the ER if you experience:
+[List specific symptoms to watch for]
+
+## YOUR FOLLOW-UP APPOINTMENTS
+[List appointments with dates, times, and locations]
+
+## QUESTIONS?
+[Contact information]

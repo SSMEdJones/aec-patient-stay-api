@@ -1,0 +1,1440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Appeal Letter Generator</title>
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --primary-hover: #1d4ed8;
+            --success-color: #059669;
+            --error-color: #dc2626;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --border-color: #e2e8f0;
+            --text-primary: #1e293b;
+            --text-secondary: #64748b;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 1.5rem;
+        }
+        
+        header {
+            background: linear-gradient(135deg, var(--primary-color), #4f46e5);
+            color: white;
+            padding: 1.5rem 2rem;
+            margin-bottom: 1.5rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        }
+        
+        header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        header p {
+            opacity: 0.9;
+            margin-top: 0.25rem;
+            font-size: 0.9rem;
+        }
+        
+        .step-indicator {
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .step.active {
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+        
+        .step.completed {
+            color: var(--success-color);
+        }
+        
+        .step-number {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 0.85rem;
+        }
+        
+        .step.active .step-number {
+            background: var(--primary-color);
+            color: white;
+        }
+        
+        .step.completed .step-number {
+            background: var(--success-color);
+            color: white;
+        }
+        
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
+            padding: 1.25rem;
+            margin-bottom: 1rem;
+        }
+        
+        .card h2 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        /* Upload Section */
+        .upload-zone {
+            border: 2px dashed var(--border-color);
+            border-radius: 12px;
+            padding: 2.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .upload-zone:hover, .upload-zone.dragover {
+            border-color: var(--primary-color);
+            background: rgba(37, 99, 235, 0.05);
+        }
+        
+        .upload-zone svg {
+            width: 40px;
+            height: 40px;
+            color: var(--text-secondary);
+            margin-bottom: 0.75rem;
+        }
+        
+        .upload-zone p {
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+        }
+        
+        #file-input {
+            display: none;
+        }
+        
+        .hospital-input {
+            margin-top: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .hospital-input label {
+            font-weight: 500;
+            white-space: nowrap;
+            font-size: 0.9rem;
+        }
+        
+        .hospital-input input {
+            flex: 1;
+        }
+        
+        /* Two-column layout for edit step */
+        .edit-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            align-items: start;
+        }
+        
+        .form-column {
+            max-height: calc(100vh - 200px);
+            overflow-y: auto;
+            padding-right: 0.5rem;
+        }
+        
+        .preview-column {
+            position: sticky;
+            top: 1rem;
+        }
+        
+        /* Form Styles */
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 0.75rem;
+        }
+        
+        .form-group {
+            margin-bottom: 0.5rem;
+        }
+        
+        .form-group.full-width {
+            grid-column: 1 / -1;
+        }
+        
+        label {
+            display: block;
+            font-weight: 500;
+            margin-bottom: 0.25rem;
+            color: var(--text-primary);
+            font-size: 0.85rem;
+        }
+        
+        .helper-text {
+            display: block;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            margin-top: 0.25rem;
+            line-height: 1.3;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 0.9rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+        }
+        
+        textarea {
+            min-height: 140px;
+            resize: vertical;
+        }
+        
+        textarea.large {
+            min-height: 200px;
+        }
+        
+        /* Preview Pane */
+        .preview-card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            overflow: hidden;
+        }
+        
+        .preview-header {
+            background: linear-gradient(135deg, #475569, #334155);
+            color: white;
+            padding: 0.75rem 1rem;
+            font-weight: 600;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .preview-header svg {
+            width: 18px;
+            height: 18px;
+        }
+        
+        .preview-content {
+            padding: 1.5rem;
+            max-height: calc(100vh - 280px);
+            overflow-y: auto;
+            font-size: 0.85rem;
+            line-height: 1.7;
+        }
+        
+        .letter-preview {
+            font-family: 'Times New Roman', Times, serif;
+            background: white;
+            padding: 2rem;
+            border: 1px solid #ddd;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .letter-header {
+            text-align: center;
+            margin-bottom: 1.5rem;
+            padding-bottom: 1rem;
+            border-bottom: 2px solid #333;
+        }
+        
+        .letter-header h3 {
+            font-size: 1.1rem;
+            font-weight: bold;
+            margin-bottom: 0.25rem;
+        }
+        
+        .letter-section {
+            margin-bottom: 1rem;
+        }
+        
+        .letter-section-title {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 0.25rem;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .letter-field {
+            background: #f8f9fa;
+            padding: 0.25rem 0.5rem;
+            border-radius: 3px;
+            display: inline;
+        }
+        
+        .letter-field.empty {
+            color: #999;
+            font-style: italic;
+        }
+        
+        .letter-body {
+            text-align: justify;
+        }
+        
+        .letter-body p {
+            margin-bottom: 1rem;
+            text-indent: 2rem;
+        }
+        
+        .letter-body p:first-child {
+            text-indent: 0;
+        }
+        
+        .letter-greeting {
+            margin-bottom: 1rem;
+        }
+        
+        .letter-closing {
+            margin-top: 1.5rem;
+        }
+        
+        .highlight {
+            background: linear-gradient(120deg, #dbeafe 0%, #bfdbfe 100%);
+            padding: 0 2px;
+            border-radius: 2px;
+        }
+        
+        /* Buttons */
+        .btn {
+            padding: 0.6rem 1.25rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+        
+        .btn-primary {
+            background: var(--primary-color);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
+        
+        .btn-primary:disabled {
+            background: var(--border-color);
+            cursor: not-allowed;
+        }
+        
+        .btn-success {
+            background: var(--success-color);
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #047857;
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--primary-color);
+            border: 1px solid var(--primary-color);
+        }
+        
+        .btn-outline:hover {
+            background: rgba(37, 99, 235, 0.05);
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 0.75rem;
+            justify-content: flex-end;
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-color);
+        }
+        
+        /* Loading */
+        .loading {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            padding: 1.5rem;
+            color: var(--text-secondary);
+        }
+        
+        .loading.active {
+            display: flex;
+        }
+        
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Messages */
+        .message {
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            display: none;
+            font-size: 0.9rem;
+        }
+        
+        .message.success {
+            background: rgba(5, 150, 105, 0.1);
+            color: var(--success-color);
+            border: 1px solid rgba(5, 150, 105, 0.2);
+        }
+        
+        .message.error {
+            background: rgba(220, 38, 38, 0.1);
+            color: var(--error-color);
+            border: 1px solid rgba(220, 38, 38, 0.2);
+        }
+        
+        .message.active {
+            display: block;
+        }
+        
+        /* Sections */
+        #step-upload, #step-edit, #step-download {
+            display: none;
+        }
+        
+        #step-upload.active, #step-edit.active, #step-download.active {
+            display: block;
+        }
+        
+        /* Download Section */
+        .download-success {
+            text-align: center;
+            padding: 2.5rem;
+        }
+        
+        .download-success svg {
+            width: 56px;
+            height: 56px;
+            color: var(--success-color);
+            margin-bottom: 1rem;
+        }
+        
+        .download-success h2 {
+            color: var(--success-color);
+            border: none;
+            padding: 0;
+            font-size: 1.25rem;
+        }
+        
+        .download-success p {
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+        }
+        
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .edit-layout {
+                grid-template-columns: 1fr;
+            }
+            
+            .preview-column {
+                position: static;
+                order: -1;
+            }
+            
+            .form-column {
+                max-height: none;
+            }
+            
+            .preview-content {
+                max-height: 400px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+            
+            .step-indicator {
+                flex-direction: column;
+                gap: 0.5rem;
+            }
+            
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .button-group {
+                flex-direction: column;
+            }
+            
+            .btn {
+                width: 100%;
+            }
+        }
+        
+        /* Compact cards for form */
+        .compact-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.75rem;
+        }
+        
+        @media (max-width: 900px) {
+            .compact-row {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Medicare Appeal Letter Generator</h1>
+            <p>Upload a clinical PDF, review and edit the extracted data, then download the completed appeal letter.</p>
+        </header>
+        
+        <div class="step-indicator">
+            <div class="step active" id="step1-indicator">
+                <span class="step-number">1</span>
+                <span>Upload PDF</span>
+            </div>
+            <div class="step" id="step2-indicator">
+                <span class="step-number">2</span>
+                <span>Review & Edit</span>
+            </div>
+            <div class="step" id="step3-indicator">
+                <span class="step-number">3</span>
+                <span>Download</span>
+            </div>
+        </div>
+        
+        <div id="message" class="message"></div>
+        
+        <!-- Step 1: Upload -->
+        <section id="step-upload" class="active">
+            <div class="card" style="max-width: 700px; margin: 0 auto;">
+                <h2>Upload Clinical Chart PDF</h2>
+                
+                <div class="upload-zone" id="drop-zone">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                    </svg>
+                    <p><strong>Drag & drop your PDF here</strong></p>
+                    <p>or click to browse</p>
+                    <input type="file" id="file-input" accept=".pdf">
+                </div>
+                
+                <div id="selected-file" style="margin-top: 1rem; display: none;">
+                    <strong>Selected:</strong> <span id="file-name"></span>
+                </div>
+                
+                <div class="hospital-input">
+                    <label for="ministry">Ministry:</label>
+                    <select id="ministry" style="flex: 1; padding: 0.5rem 0.75rem; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.9rem;">
+                        <option value="">-- Select Ministry --</option>
+                        <option value="ssm_stmarys">SSM Health St. Mary's Hospital - Madison</option>
+                        <option value="ssm_stclare">SSM Health St. Clare Hospital - Baraboo</option>
+                        <option value="ssm_stagnes">SSM Health St. Agnes Hospital - Fond du Lac</option>
+                        <option value="ssm_dean">SSM Health Dean Medical Group</option>
+                        <option value="ssm_stlouis">SSM Health St. Louis University Hospital</option>
+                        <option value="ssm_cardinal">SSM Health Cardinal Glennon Children's Hospital</option>
+                        <option value="ssm_depaul">SSM Health DePaul Hospital - St. Louis</option>
+                        <option value="ssm_joseph_stcharles">SSM Health St. Joseph Hospital - St. Charles</option>
+                        <option value="ssm_joseph_wentzville">SSM Health St. Joseph Hospital - Wentzville</option>
+                        <option value="ssm_oklahoma">SSM Health Oklahoma</option>
+                    </select>
+                </div>
+                
+                <div class="loading" id="upload-loading">
+                    <div class="spinner"></div>
+                    <span>Processing PDF and generating appeal data...</span>
+                </div>
+                
+                <div class="button-group">
+                    <button class="btn btn-primary" id="upload-btn" disabled>
+                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                        </svg>
+                        Upload & Process
+                    </button>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Step 2: Edit with Preview -->
+        <section id="step-edit">
+            <div class="edit-layout">
+                <!-- Left: Form -->
+                <div class="form-column">
+                    <form id="appeal-form">
+                        <input type="hidden" id="session-id">
+                        
+                        <!-- Patient Information -->
+                        <div class="card">
+                            <h2>Patient Information</h2>
+                            <div class="compact-row">
+                                <div class="form-group">
+                                    <label for="member_name">Member Name</label>
+                                    <input type="text" id="member_name" name="member_name" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="dob">Date of Birth</label>
+                                    <input type="text" id="dob" name="dob" placeholder="MM/DD/YYYY">
+                                </div>
+                                <div class="form-group">
+                                    <label for="age">Age</label>
+                                    <input type="text" id="age" name="age">
+                                </div>
+                                <div class="form-group">
+                                    <label for="gender">Gender</label>
+                                    <select id="gender" name="gender">
+                                        <option value="male">Male</option>
+                                        <option value="female">Female</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="member_id">Member ID</label>
+                                    <input type="text" id="member_id" name="member_id">
+                                </div>
+                                <div class="form-group">
+                                    <label for="medical_history">Past Medical History</label>
+                                    <input type="text" id="medical_history" name="medical_history" placeholder="HTN, DM, HLD...">
+                                </div>
+                            </div>
+                            <div class="form-group full-width">
+                                <label for="complaint">Chief Complaint</label>
+                                <textarea id="complaint" name="complaint"></textarea>
+                            </div>
+                        </div>
+                        
+                        <!-- Case Information -->
+                        <div class="card">
+                            <h2>Case Information</h2>
+                            <div class="compact-row">
+                                <div class="form-group">
+                                    <label for="observation_date">Observation Date</label>
+                                    <input type="text" id="observation_date" name="observation_date" placeholder="MM/DD/YYYY">
+                                    <small class="helper-text">Date patient was placed on observation status. Leave blank for direct admits.</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="inpatient_date">Inpatient Date</label>
+                                    <input type="text" id="inpatient_date" name="inpatient_date" placeholder="MM/DD/YYYY">
+                                    <small class="helper-text">Date converted to inpatient. Leave blank for observation-only appeals.</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="place_of_service">Place of Service</label>
+                                    <input type="text" id="place_of_service" name="place_of_service">
+                                </div>
+                                <div class="form-group">
+                                    <label for="reference_number">Reference Number</label>
+                                    <input type="text" id="reference_number" name="reference_number">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Payer Information -->
+                        <div class="card">
+                            <h2>Payer Information</h2>
+                            <div class="form-grid">
+                                <div class="form-group full-width">
+                                    <label for="payer_name">Payer Name</label>
+                                    <input type="text" id="payer_name" name="payer_name">
+                                </div>
+                                <div class="form-group full-width">
+                                    <label for="street_address">Street Address</label>
+                                    <input type="text" id="street_address" name="street_address">
+                                </div>
+                            </div>
+                            <div class="compact-row" style="grid-template-columns: 2fr 1fr 1fr;">
+                                <div class="form-group">
+                                    <label for="city">City</label>
+                                    <input type="text" id="city" name="city">
+                                </div>
+                                <div class="form-group">
+                                    <label for="state">State</label>
+                                    <input type="text" id="state" name="state" maxlength="2">
+                                </div>
+                                <div class="form-group">
+                                    <label for="zip_code">ZIP Code</label>
+                                    <input type="text" id="zip_code" name="zip_code">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Generated Content -->
+                        <div class="card">
+                            <h2>Midnight Reason Justifications</h2>
+                            <div class="form-group">
+                                <label for="midnight_reason_1">Midnight Reason 1 (Medical Necessity)</label>
+                                <textarea id="midnight_reason_1" name="midnight_reason_1" class="large" required></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="midnight_reason_2">Midnight Reason 2 (Additional Justification)</label>
+                                <textarea id="midnight_reason_2" name="midnight_reason_2" class="large" required></textarea>
+                            </div>
+                        </div>
+                        
+                        <div class="loading" id="generate-loading">
+                            <div class="spinner"></div>
+                            <span>Generating appeal letter...</span>
+                        </div>
+                        
+                        <div class="button-group">
+                            <button type="button" class="btn btn-outline" id="back-btn">
+                                Back to Upload
+                            </button>
+                            <button type="submit" class="btn btn-success" id="generate-btn">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                </svg>
+                                Generate Appeal Letter
+                            </button>
+                        </div>
+                    </form>
+                </div>
+                
+                <!-- Right: Preview -->
+                <div class="preview-column">
+                    <div class="preview-card">
+                        <div class="preview-header">
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            Live Letter Preview
+                        </div>
+                        <div class="preview-content">
+                            <div class="letter-preview" id="letter-preview">
+                                <!-- Preview content will be generated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Step 3: Download -->
+        <section id="step-download">
+            <div class="card" style="max-width: 600px; margin: 0 auto;">
+                <div class="download-success">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <h2>Appeal Letter Generated!</h2>
+                    <p>Your appeal letter has been generated successfully.</p>
+                    <p><strong>Filename:</strong> <span id="download-filename"></span></p>
+                    
+                    <div class="button-group" style="justify-content: center;">
+                        <a id="download-link" class="btn btn-success" href="#" download>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            Download Document
+                        </a>
+                        <button class="btn btn-outline" id="new-appeal-btn">
+                            Start New Appeal
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+    
+    <script>
+        // State
+        let currentSessionId = null;
+        let selectedFile = null;
+        
+        // Elements
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const uploadBtn = document.getElementById('upload-btn');
+        const selectedFileDiv = document.getElementById('selected-file');
+        const fileNameSpan = document.getElementById('file-name');
+        const ministrySelect = document.getElementById('ministry');
+        const uploadLoading = document.getElementById('upload-loading');
+        const generateLoading = document.getElementById('generate-loading');
+        const messageDiv = document.getElementById('message');
+        const appealForm = document.getElementById('appeal-form');
+        const backBtn = document.getElementById('back-btn');
+        const newAppealBtn = document.getElementById('new-appeal-btn');
+        const letterPreview = document.getElementById('letter-preview');
+        
+        // Step elements
+        const stepUpload = document.getElementById('step-upload');
+        const stepEdit = document.getElementById('step-edit');
+        const stepDownload = document.getElementById('step-download');
+        const step1Indicator = document.getElementById('step1-indicator');
+        const step2Indicator = document.getElementById('step2-indicator');
+        const step3Indicator = document.getElementById('step3-indicator');
+        
+        // Form fields for preview
+        const previewFields = [
+            'member_name', 'dob', 'age', 'gender', 'member_id', 'medical_history', 
+            'complaint', 'observation_date', 'inpatient_date', 'place_of_service',
+            'reference_number', 'payer_name', 'street_address', 'city', 'state', 
+            'zip_code', 'midnight_reason_1', 'midnight_reason_2'
+        ];
+        
+        // Utility functions
+        function showMessage(text, type) {
+            messageDiv.textContent = text;
+            messageDiv.className = `message ${type} active`;
+            setTimeout(() => {
+                messageDiv.className = 'message';
+            }, 5000);
+        }
+        
+        function setStep(step) {
+            stepUpload.classList.remove('active');
+            stepEdit.classList.remove('active');
+            stepDownload.classList.remove('active');
+            
+            step1Indicator.className = 'step';
+            step2Indicator.className = 'step';
+            step3Indicator.className = 'step';
+            
+            if (step === 1) {
+                stepUpload.classList.add('active');
+                step1Indicator.classList.add('active');
+            } else if (step === 2) {
+                stepEdit.classList.add('active');
+                step1Indicator.classList.add('completed');
+                step2Indicator.classList.add('active');
+                updatePreview();
+            } else if (step === 3) {
+                stepDownload.classList.add('active');
+                step1Indicator.classList.add('completed');
+                step2Indicator.classList.add('completed');
+                step3Indicator.classList.add('active');
+            }
+        }
+        
+        function getFieldValue(id) {
+            const el = document.getElementById(id);
+            return el ? el.value : '';
+        }
+        
+        function formatField(value, placeholder = '[Not provided]') {
+            if (!value || value.trim() === '') {
+                return `<span class="letter-field empty">${placeholder}</span>`;
+            }
+            return `<span class="highlight">${value}</span>`;
+        }
+        
+        function getArticle(age) {
+            // Use "an" for ages starting with 8, 11, 18, 80-89
+            if (!age) return 'a';
+            const ageStr = age.toString();
+            if (ageStr.startsWith('8') || ageStr === '11' || ageStr === '18') {
+                return 'an';
+            }
+            return 'a';
+        }
+        
+        function formatDOS() {
+            const obs = getFieldValue('observation_date');
+            const inp = getFieldValue('inpatient_date');
+            
+            if (obs && inp) {
+                return `${obs} - Observation<br>&nbsp;&nbsp;${inp} – Current, Inpatient`;
+            } else if (obs) {
+                return `${obs} - Observation`;
+            } else if (inp) {
+                return `${inp} - Inpatient`;
+            }
+            return '[Date of Service]';
+        }
+        
+        function updatePreview() {
+            const memberName = getFieldValue('member_name') || '[Member Name]';
+            const dob = getFieldValue('dob') || '[DOB]';
+            const age = getFieldValue('age') || '[Age]';
+            const gender = getFieldValue('gender') || 'male';
+            const memberId = getFieldValue('member_id') || '[Member ID]';
+            const medHistory = getFieldValue('medical_history') || '[Medical History]';
+            const complaint = getFieldValue('complaint') || '[Chief Complaint]';
+            const placeOfService = getFieldValue('place_of_service') || '[Place of Service]';
+            const refNumber = getFieldValue('reference_number') || '[Reference #]';
+            const payerName = getFieldValue('payer_name') || '[Payer Name]';
+            const streetAddress = getFieldValue('street_address') || '[Street Address]';
+            const city = getFieldValue('city') || '[City]';
+            const state = getFieldValue('state') || '[ST]';
+            const zipCode = getFieldValue('zip_code') || '[ZIP]';
+            const mn1 = getFieldValue('midnight_reason_1') || '[Midnight Reason 1]';
+            const mn2 = getFieldValue('midnight_reason_2') || '[Midnight Reason 2]';
+            
+            const article = getArticle(age);
+            const dosHeader = formatDOS();
+            const dosBody = getFieldValue('observation_date') || getFieldValue('inpatient_date') || '[DOS]';
+            
+            letterPreview.innerHTML = `
+                <div class="letter-header">
+                    <h3>MEDICARE APPEAL LETTER</h3>
+                    <div style="font-size: 0.75rem; color: #666;">Observation to Inpatient Status Review</div>
+                </div>
+                
+                <div class="letter-section">
+                    <div class="letter-section-title">Payer Information</div>
+                    <div>${formatField(payerName)}</div>
+                    <div>${formatField(streetAddress)}</div>
+                    <div>${formatField(city)}, ${formatField(state)} ${formatField(zipCode)}</div>
+                </div>
+                
+                <div class="letter-section">
+                    <div class="letter-section-title">Reference</div>
+                    <div><strong>Re:</strong> ${formatField(memberName)}</div>
+                    <div><strong>DOB:</strong> ${formatField(dob)}</div>
+                    <div><strong>Member ID:</strong> ${formatField(memberId)}</div>
+                    <div><strong>Reference #:</strong> ${formatField(refNumber)}</div>
+                    <div><strong>DOS:</strong> ${dosHeader}</div>
+                    <div><strong>Place of Service:</strong> ${formatField(placeOfService)}</div>
+                </div>
+                
+                <div class="letter-greeting">
+                    <strong>To Whom It May Concern:</strong>
+                </div>
+                
+                <div class="letter-body">
+                    <p>
+                        We are writing this letter on behalf of ${formatField(memberName)}, 
+                        ${article} ${formatField(age)}-year-old ${formatField(gender)} with 
+                        a past medical history of ${formatField(medHistory)}, who was seen at 
+                        ${formatField(placeOfService)} on ${formatField(dosBody)} with ${formatField(complaint)}.
+                    </p>
+                    
+                    <p>
+                        <strong>Medical Necessity for Inpatient Admission:</strong><br>
+                        ${formatField(mn1)}.
+                    </p>
+                    
+                    <p>
+                        <strong>Additional Clinical Justification:</strong><br>
+                        ${formatField(mn2)}.
+                    </p>
+                    
+                    <p>
+                        Based on the clinical presentation, severity of illness, and intensity of services required, 
+                        we respectfully request that the observation stay be converted to inpatient status. 
+                        The patient met criteria for inpatient admission at the time of presentation given the 
+                        complexity of their condition and the level of care required.
+                    </p>
+                </div>
+                
+                <div class="letter-closing">
+                    <p>Respectfully submitted,</p>
+                    <br>
+                    <p><strong>Physician Advisor</strong><br>
+                    ${formatField(placeOfService)}</p>
+                </div>
+            `;
+        }
+        
+        function populateForm(data) {
+            document.getElementById('session-id').value = data.session_id;
+            document.getElementById('member_name').value = data.member_name || '';
+            document.getElementById('dob').value = data.dob || '';
+            document.getElementById('age').value = data.age || '';
+            document.getElementById('gender').value = data.gender || 'male';
+            document.getElementById('member_id').value = data.member_id || '';
+            document.getElementById('medical_history').value = data.medical_history || '';
+            document.getElementById('complaint').value = data.complaint || '';
+            document.getElementById('observation_date').value = data.observation_date || '';
+            document.getElementById('inpatient_date').value = data.inpatient_date || '';
+            document.getElementById('place_of_service').value = data.place_of_service || '';
+            document.getElementById('reference_number').value = data.reference_number || '';
+            document.getElementById('payer_name').value = data.payer_name || '';
+            document.getElementById('street_address').value = data.street_address || '';
+            document.getElementById('city').value = data.city || '';
+            document.getElementById('state').value = data.state || '';
+            document.getElementById('zip_code').value = data.zip_code || '';
+            document.getElementById('midnight_reason_1').value = data.midnight_reason_1 || '';
+            document.getElementById('midnight_reason_2').value = data.midnight_reason_2 || '';
+        }
+        
+        // Event handlers for live preview
+        previewFields.forEach(fieldId => {
+            const field = document.getElementById(fieldId);
+            if (field) {
+                field.addEventListener('input', updatePreview);
+                field.addEventListener('change', updatePreview);
+            }
+        });
+        
+        // Upload handlers
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type === 'application/pdf') {
+                fileInput.files = files;
+                handleFileSelect(files[0]);
+            } else {
+                showMessage('Please upload a PDF file.', 'error');
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+        
+        function checkUploadReady() {
+            const hasFile = selectedFile !== null;
+            const hasMinistry = ministrySelect.value !== '';
+            uploadBtn.disabled = !(hasFile && hasMinistry);
+        }
+        
+        function handleFileSelect(file) {
+            selectedFile = file;
+            fileNameSpan.textContent = file.name;
+            selectedFileDiv.style.display = 'block';
+            checkUploadReady();
+        }
+        
+        // Ministry selection handler
+        ministrySelect.addEventListener('change', checkUploadReady);
+        
+        uploadBtn.addEventListener('click', async () => {
+            if (!selectedFile) {
+                showMessage('Please select a PDF file.', 'error');
+                return;
+            }
+            
+            if (!ministrySelect.value) {
+                showMessage('Please select a ministry.', 'error');
+                return;
+            }
+            
+            uploadBtn.disabled = true;
+            uploadLoading.classList.add('active');
+            
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+            formData.append('ministry', ministrySelect.value);
+            
+            try {
+                const response = await fetch('/appeal/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Upload failed');
+                }
+                
+                const data = await response.json();
+                currentSessionId = data.session_id;
+                populateForm(data);
+                setStep(2);
+                showMessage('PDF processed successfully! Review and edit the data below.', 'success');
+                
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, 'error');
+                uploadBtn.disabled = false;
+            } finally {
+                uploadLoading.classList.remove('active');
+            }
+        });
+        
+        backBtn.addEventListener('click', () => {
+            setStep(1);
+            fileInput.value = '';
+            selectedFile = null;
+            selectedFileDiv.style.display = 'none';
+            uploadBtn.disabled = true;
+        });
+        
+        appealForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const generateBtn = document.getElementById('generate-btn');
+            generateBtn.disabled = true;
+            generateLoading.classList.add('active');
+            
+            const formData = {
+                session_id: document.getElementById('session-id').value,
+                member_name: document.getElementById('member_name').value,
+                dob: document.getElementById('dob').value,
+                age: document.getElementById('age').value,
+                gender: document.getElementById('gender').value,
+                member_id: document.getElementById('member_id').value,
+                medical_history: document.getElementById('medical_history').value,
+                complaint: document.getElementById('complaint').value,
+                observation_date: document.getElementById('observation_date').value,
+                inpatient_date: document.getElementById('inpatient_date').value,
+                place_of_service: document.getElementById('place_of_service').value,
+                reference_number: document.getElementById('reference_number').value,
+                payer_name: document.getElementById('payer_name').value,
+                street_address: document.getElementById('street_address').value,
+                city: document.getElementById('city').value,
+                state: document.getElementById('state').value,
+                zip_code: document.getElementById('zip_code').value,
+                midnight_reason_1: document.getElementById('midnight_reason_1').value,
+                midnight_reason_2: document.getElementById('midnight_reason_2').value
+            };
+            
+            try {
+                const response = await fetch('/appeal/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Generation failed');
+                }
+                
+                const data = await response.json();
+                
+                document.getElementById('download-filename').textContent = data.filename;
+                document.getElementById('download-link').href = data.download_url;
+                
+                setStep(3);
+                
+            } catch (error) {
+                showMessage(`Error: ${error.message}`, 'error');
+            } finally {
+                generateBtn.disabled = false;
+                generateLoading.classList.remove('active');
+            }
+        });
+        
+        newAppealBtn.addEventListener('click', () => {
+            if (currentSessionId) {
+                fetch(`/appeal/session/${currentSessionId}`, { method: 'DELETE' });
+            }
+            
+            currentSessionId = null;
+            fileInput.value = '';
+            selectedFile = null;
+            selectedFileDiv.style.display = 'none';
+            uploadBtn.disabled = true;
+            appealForm.reset();
+            setStep(1);
+        });
+        
+        // ============================================
+        // Chat Widget
+        // ============================================
+        
+        let chatOpen = false;
+        let chatMessages = [];
+        let pendingFeedback = null;
+        let savingFeedback = false;
+        
+        function createChatWidget() {
+            // Create chat button
+            const chatBtn = document.createElement('button');
+            chatBtn.id = 'chat-btn';
+            chatBtn.innerHTML = '💬';
+            chatBtn.title = 'Chat with AI Assistant';
+            chatBtn.style.cssText = `
+                position: fixed;
+                bottom: 30px;
+                right: 30px;
+                width: 56px;
+                height: 56px;
+                border-radius: 50%;
+                background: linear-gradient(135deg, #2563eb, #4f46e5);
+                color: white;
+                border: none;
+                cursor: pointer;
+                font-size: 24px;
+                box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+                z-index: 1000;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: transform 0.2s, box-shadow 0.2s;
+            `;
+            chatBtn.onmouseover = () => chatBtn.style.transform = 'scale(1.05)';
+            chatBtn.onmouseout = () => chatBtn.style.transform = 'scale(1)';
+            chatBtn.onclick = toggleChat;
+            document.body.appendChild(chatBtn);
+            
+            // Create chat window
+            const chatWindow = document.createElement('div');
+            chatWindow.id = 'chat-window';
+            chatWindow.style.cssText = `
+                position: fixed;
+                bottom: 100px;
+                right: 30px;
+                width: 380px;
+                height: 500px;
+                background: white;
+                border-radius: 12px;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+                display: none;
+                flex-direction: column;
+                z-index: 999;
+                overflow: hidden;
+            `;
+            chatWindow.innerHTML = `
+                <div style="background: linear-gradient(135deg, #2563eb, #4f46e5); color: white; padding: 15px 20px;">
+                    <div style="font-weight: bold; font-size: 15px;">🤖 Appeal Assistant</div>
+                    <div style="font-size: 12px; opacity: 0.9;">Ask about Midnight Reasons or suggest improvements</div>
+                </div>
+                <div id="chat-messages" style="flex: 1; overflow-y: auto; padding: 15px; background: #f8fafc;"></div>
+                <div id="chat-feedback-prompt" style="display: none; padding: 12px; background: #fff3e0; border-top: 1px solid #ffb74d;"></div>
+                <div style="padding: 12px; border-top: 1px solid #e2e8f0; background: white; display: flex; gap: 8px;">
+                    <input type="text" id="chat-input" placeholder="Ask about the generated content..." 
+                        style="flex: 1; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 20px; outline: none; font-size: 14px;">
+                    <button id="chat-send" style="padding: 10px 16px; background: #2563eb; color: white; border: none; border-radius: 20px; cursor: pointer;">Send</button>
+                </div>
+            `;
+            document.body.appendChild(chatWindow);
+            
+            // Event listeners
+            document.getElementById('chat-input').addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') sendChatMessage();
+            });
+            document.getElementById('chat-send').addEventListener('click', sendChatMessage);
+        }
+        
+        function toggleChat() {
+            chatOpen = !chatOpen;
+            const chatWindow = document.getElementById('chat-window');
+            const chatBtn = document.getElementById('chat-btn');
+            
+            if (chatOpen) {
+                chatWindow.style.display = 'flex';
+                chatBtn.innerHTML = '✕';
+                
+                // Show intro message if first time
+                if (chatMessages.length === 0) {
+                    chatMessages.push({
+                        role: 'assistant',
+                        content: `Hi! I'm your Appeal Assistant. I can help you understand and improve the generated Midnight Reasons.\n\nYou can ask me:\n• "Why was Midnight Reason 1 written this way?"\n• "How can I improve this justification?"\n• "This should mention the patient's elevated troponin..."\n\nYour feedback helps improve future generations!`
+                    });
+                    renderChatMessages();
+                }
+            } else {
+                chatWindow.style.display = 'none';
+                chatBtn.innerHTML = '💬';
+            }
+        }
+        
+        function renderChatMessages() {
+            const container = document.getElementById('chat-messages');
+            container.innerHTML = chatMessages.map(msg => `
+                <div style="margin-bottom: 12px; display: flex; justify-content: ${msg.role === 'user' ? 'flex-end' : 'flex-start'};">
+                    <div style="
+                        max-width: 85%;
+                        padding: 10px 14px;
+                        border-radius: ${msg.role === 'user' ? '18px 18px 4px 18px' : '18px 18px 18px 4px'};
+                        background: ${msg.role === 'user' ? '#2563eb' : 'white'};
+                        color: ${msg.role === 'user' ? 'white' : '#333'};
+                        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+                        white-space: pre-wrap;
+                        font-size: 14px;
+                        line-height: 1.5;
+                    ">${msg.content}</div>
+                </div>
+            `).join('');
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        function renderFeedbackPrompt() {
+            const container = document.getElementById('chat-feedback-prompt');
+            if (!pendingFeedback) {
+                container.style.display = 'none';
+                return;
+            }
+            
+            container.style.display = 'block';
+            container.innerHTML = `
+                <div style="font-size: 13px; color: #e65100; margin-bottom: 8px;">
+                    💡 <strong>Improvement detected for ${pendingFeedback.condition_category || 'this case'}</strong>
+                </div>
+                <div style="font-size: 12px; color: #666; margin-bottom: 10px;">
+                    "${pendingFeedback.improvement_reason || 'Save this feedback for future appeals'}"
+                </div>
+                <div style="display: flex; gap: 8px;">
+                    <button onclick="saveFeedback()" style="padding: 6px 12px; background: #4caf50; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        ${savingFeedback ? 'Saving...' : '✓ Save for Training'}
+                    </button>
+                    <button onclick="dismissFeedback()" style="padding: 6px 12px; background: transparent; color: #666; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        Dismiss
+                    </button>
+                </div>
+            `;
+        }
+        
+        async function sendChatMessage() {
+            const input = document.getElementById('chat-input');
+            const message = input.value.trim();
+            if (!message || !currentSessionId) return;
+            
+            // Add user message
+            chatMessages.push({ role: 'user', content: message });
+            renderChatMessages();
+            input.value = '';
+            
+            // Show thinking indicator
+            chatMessages.push({ role: 'assistant', content: 'Thinking...' });
+            renderChatMessages();
+            
+            try {
+                const response = await fetch('/appeal/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: currentSessionId,
+                        message: message,
+                        conversation_history: chatMessages.slice(0, -1), // Exclude "Thinking..."
+                        context: {
+                            chief_complaint: document.getElementById('complaint').value,
+                            conditions: document.getElementById('medical_history').value.split(',').map(s => s.trim()),
+                            midnight_reason_1: document.getElementById('midnight_reason_1').value,
+                            midnight_reason_2: document.getElementById('midnight_reason_2').value
+                        }
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Replace "Thinking..." with actual response
+                chatMessages[chatMessages.length - 1] = { role: 'assistant', content: data.response };
+                renderChatMessages();
+                
+                // Check for pending feedback
+                if (data.pending_feedback) {
+                    pendingFeedback = data.pending_feedback;
+                    renderFeedbackPrompt();
+                }
+                
+            } catch (error) {
+                chatMessages[chatMessages.length - 1] = { 
+                    role: 'assistant', 
+                    content: 'Sorry, I encountered an error. Please try again.' 
+                };
+                renderChatMessages();
+            }
+        }
+        
+        async function saveFeedback() {
+            if (!pendingFeedback || savingFeedback) return;
+            
+            savingFeedback = true;
+            renderFeedbackPrompt();
+            
+            try {
+                await fetch('/appeal/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        condition_category: pendingFeedback.condition_category || 'general',
+                        original_text: pendingFeedback.original_text || '',
+                        improved_text: pendingFeedback.improved_text || '',
+                        improvement_reason: pendingFeedback.improvement_reason || '',
+                        created_by: 'user'
+                    })
+                });
+                
+                chatMessages.push({
+                    role: 'assistant',
+                    content: `✅ Feedback saved! This will help improve future ${pendingFeedback.condition_category || ''} appeals.`
+                });
+                renderChatMessages();
+                
+            } catch (error) {
+                chatMessages.push({
+                    role: 'assistant',
+                    content: '❌ Could not save feedback. Please try again.'
+                });
+                renderChatMessages();
+            }
+            
+            pendingFeedback = null;
+            savingFeedback = false;
+            renderFeedbackPrompt();
+        }
+        
+        function dismissFeedback() {
+            pendingFeedback = null;
+            renderFeedbackPrompt();
+        }
+        
+        // Initialize chat widget
+        createChatWidget();
+    </script>
+</body>
+</html>

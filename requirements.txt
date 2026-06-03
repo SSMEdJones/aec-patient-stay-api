@@ -1,0 +1,38 @@
+# Core AWS dependencies (same as aec-mychart-qa-api)
+boto3>=1.26.0
+botocore>=1.29.0
+
+# Epic FHIR API
+fhirclient>=4.0.0
+httpx>=0.26.0
+PyJWT>=2.8.0
+
+# LLM Providers (optional - for Azure/OpenAI)
+openai>=1.12.0
+tiktoken>=0.5.0
+
+# Web API
+fastapi>=0.109.0
+uvicorn>=0.27.0
+
+# Environment
+python-dotenv>=0.19.0
+
+# Data models
+pydantic>=2.5.0
+
+# Logging
+structlog>=24.1.0
+
+# HTTP
+requests>=2.25.0
+urllib3>=1.26.0
+
+# File upload support
+python-multipart>=0.0.6
+
+# PDF parsing
+pdfplumber>=0.10.0
+
+# Word document generation
+python-docx>=1.0.0
