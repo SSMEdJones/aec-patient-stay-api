@@ -45,3 +45,11 @@ EPIC_SCOPE = os.getenv("EPIC_SCOPE", "openid fhirUser patient/*.read")
 API_PORT = int(os.getenv("API_PORT", "8001"))  # Use 8001 to avoid collision with mychart-qa (8000)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 DEBUG_MODE = os.getenv("DEBUG_MODE", "False").lower() == "true"
+
+# =============================================================================
+# Langfuse LLM Observability
+# =============================================================================
+LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+LANGFUSE_ENABLED = bool(LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY)

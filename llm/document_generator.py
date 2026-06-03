@@ -4,18 +4,34 @@ import urllib3
 import structlog
 from typing import List, Optional, Union
 from pathlib import Path
+from datetime import datetime
 
 from models import ClinicalNote, PatientInfo, Encounter, PatientStaySummary
 from config import (
     LLM_PROVIDER, AWS_REGION, BEDROCK_MODEL_ID,
     AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY, AZURE_OPENAI_DEPLOYMENT, AZURE_OPENAI_API_VERSION,
-    OPENAI_API_KEY, OPENAI_MODEL
+    OPENAI_API_KEY, OPENAI_MODEL,
+    LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST, LANGFUSE_ENABLED
 )
 
 # Disable SSL warnings for corporate networks (same as aec-mychart-qa-api)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = structlog.get_logger(__name__)
+
+# Initialize Langfuse if configured
+langfuse_client = None
+if LANGFUSE_ENABLED:
+    try:
+        from langfuse import Langfuse
+        langfuse_client = Langfuse(
+            public_key=LANGFUSE_PUBLIC_KEY,
+            secret_key=LANGFUSE_SECRET_KEY,
+            host=LANGFUSE_HOST
+        )
+        logger.info("Langfuse initialized for LLM observability", host=LANGFUSE_HOST)
+    except Exception as e:
+        logger.warning("Failed to initialize Langfuse", error=str(e))
 
 
 class BedrockClient:
@@ -74,7 +90,29 @@ class BedrockClient:
         )
         
         response_body = json.loads(response["body"].read())
-        return response_body["content"][0]["text"]
+        output_text = response_body["content"][0]["text"]
+        
+        # Log to Langfuse if enabled
+        if langfuse_client:
+            try:
+                trace = langfuse_client.trace(
+                    name="bedrock-chat-completion",
+                    metadata={"model": self.model_id, "temperature": temperature}
+                )
+                trace.generation(
+                    name="chat-completion",
+                    model=self.model_id,
+                    input=messages,
+                    output=output_text,
+                    usage={
+                        "input": response_body.get("usage", {}).get("input_tokens", 0),
+                        "output": response_body.get("usage", {}).get("output_tokens", 0)
+                    }
+                )
+            except Exception as e:
+                logger.warning("Langfuse logging failed", error=str(e))
+        
+        return output_text
 
 
 class DocumentGenerator:

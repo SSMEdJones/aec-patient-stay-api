@@ -17,11 +17,25 @@ from datetime import datetime
 
 from config import (
     EPIC_BASE_URL, EPIC_CLIENT_ID, EPIC_TOKEN_URL, EPIC_PRIVATE_KEY_PATH,
-    AWS_REGION, BEDROCK_MODEL_ID
+    AWS_REGION, BEDROCK_MODEL_ID,
+    LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST, LANGFUSE_ENABLED
 )
 
 # Disable SSL warnings for corporate networks
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Initialize Langfuse if configured
+langfuse_client = None
+if LANGFUSE_ENABLED:
+    try:
+        from langfuse import Langfuse
+        langfuse_client = Langfuse(
+            public_key=LANGFUSE_PUBLIC_KEY,
+            secret_key=LANGFUSE_SECRET_KEY,
+            host=LANGFUSE_HOST
+        )
+    except Exception:
+        pass
 
 
 def fix_a_an_grammar(text: str) -> str:
@@ -286,7 +300,8 @@ class MidnightReasonGenerator:
         self.epic_fetcher = EpicDataFetcher()
     
     def _call_llm(self, system_prompt: str, user_prompt: str, 
-                  temperature: float = 0.3, max_tokens: int = 2000) -> str:
+                  temperature: float = 0.3, max_tokens: int = 2000,
+                  trace_name: str = "midnight-reason") -> str:
         """Call AWS Bedrock Claude model."""
         request_body = {
             "anthropic_version": "bedrock-2023-05-31",
@@ -304,7 +319,29 @@ class MidnightReasonGenerator:
         )
         
         response_body = json.loads(response["body"].read())
-        return response_body["content"][0]["text"]
+        output_text = response_body["content"][0]["text"]
+        
+        # Log to Langfuse if enabled
+        if langfuse_client:
+            try:
+                trace = langfuse_client.trace(
+                    name=trace_name,
+                    metadata={"model": self.model_id, "temperature": temperature}
+                )
+                trace.generation(
+                    name="llm-call",
+                    model=self.model_id,
+                    input={"system": system_prompt[:500], "user": user_prompt[:500]},
+                    output=output_text,
+                    usage={
+                        "input": response_body.get("usage", {}).get("input_tokens", 0),
+                        "output": response_body.get("usage", {}).get("output_tokens", 0)
+                    }
+                )
+            except Exception:
+                pass
+        
+        return output_text
     
     def _format_patient_data(self, data: PatientStayData) -> str:
         """Format patient data for the LLM prompt."""

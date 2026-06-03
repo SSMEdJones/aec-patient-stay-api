@@ -16,6 +16,20 @@ import pdfplumber
 import boto3
 
 from services.midnight_reason_generator import PatientStayData
+from config import LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST, LANGFUSE_ENABLED
+
+# Initialize Langfuse if configured
+langfuse_client = None
+if LANGFUSE_ENABLED:
+    try:
+        from langfuse import Langfuse
+        langfuse_client = Langfuse(
+            public_key=LANGFUSE_PUBLIC_KEY,
+            secret_key=LANGFUSE_SECRET_KEY,
+            host=LANGFUSE_HOST
+        )
+    except Exception:
+        pass
 
 
 # Synthetic name pools for de-identification
@@ -138,6 +152,27 @@ Return ONLY valid JSON, no other text."""
         )
         
         result_text = response["output"]["message"]["content"][0]["text"]
+        
+        # Log to Langfuse if enabled
+        if langfuse_client:
+            try:
+                usage = response.get("usage", {})
+                trace = langfuse_client.trace(
+                    name="pdf-chart-extraction",
+                    metadata={"model": self.model_id}
+                )
+                trace.generation(
+                    name="extract-clinical-data",
+                    model=self.model_id,
+                    input=prompt[:1000] + "...[truncated]",  # Don't log full PHI
+                    output=result_text,
+                    usage={
+                        "input": usage.get("inputTokens", 0),
+                        "output": usage.get("outputTokens", 0)
+                    }
+                )
+            except Exception:
+                pass
         
         # Parse JSON from response
         try:

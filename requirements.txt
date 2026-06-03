@@ -24,6 +24,9 @@ pydantic>=2.5.0
 # Logging
 structlog>=24.1.0
 
+# LLM Observability
+langfuse>=2.0.0
+
 # HTTP
 requests>=2.25.0
 urllib3>=1.26.0
