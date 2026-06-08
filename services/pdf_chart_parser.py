@@ -7,6 +7,8 @@ and creates structured PatientStayData for testing.
 import re
 import json
 import random
+import logging
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -18,24 +20,103 @@ import boto3
 from services.midnight_reason_generator import PatientStayData
 from config import LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST, LANGFUSE_ENABLED
 
+logger = logging.getLogger(__name__)
+
 # Initialize Langfuse if configured
 langfuse_client = None
 if LANGFUSE_ENABLED:
     try:
+        os.environ.setdefault("LANGFUSE_PUBLIC_KEY", LANGFUSE_PUBLIC_KEY)
+        os.environ.setdefault("LANGFUSE_SECRET_KEY", LANGFUSE_SECRET_KEY)
+        os.environ.setdefault("LANGFUSE_HOST", LANGFUSE_HOST)
+        
         from langfuse import Langfuse
-        langfuse_client = Langfuse(
-            public_key=LANGFUSE_PUBLIC_KEY,
-            secret_key=LANGFUSE_SECRET_KEY,
-            host=LANGFUSE_HOST
-        )
-    except Exception:
-        pass
+        langfuse_client = Langfuse()
+        logger.info(f"Langfuse initialized: {LANGFUSE_HOST}")
+    except Exception as e:
+        logger.error(f"Langfuse initialization failed: {e}")
+else:
+    logger.info("Langfuse disabled (missing keys)")
 
 
 # Synthetic name pools for de-identification
 FIRST_NAMES_F = ["Maria", "Jennifer", "Linda", "Patricia", "Elizabeth", "Susan", "Dorothy", "Helen", "Nancy", "Betty"]
 FIRST_NAMES_M = ["James", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles", "Daniel"]
 LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
+
+# Medical abbreviation mappings (bidirectional)
+MEDICAL_ABBREVIATIONS = {
+    # Cardiovascular
+    "chf": "congestive heart failure",
+    "cad": "coronary artery disease",
+    "afib": "atrial fibrillation",
+    "a-fib": "atrial fibrillation",
+    "af": "atrial fibrillation",
+    "htn": "hypertension",
+    "mi": "myocardial infarction",
+    "cabg": "coronary artery bypass graft",
+    "dvt": "deep vein thrombosis",
+    "pe": "pulmonary embolism",
+    "pvd": "peripheral vascular disease",
+    "pad": "peripheral artery disease",
+    "tia": "transient ischemic attack",
+    "cva": "cerebrovascular accident",
+    "stroke": "cerebrovascular accident",
+    
+    # Respiratory
+    "copd": "chronic obstructive pulmonary disease",
+    "sob": "shortness of breath",
+    "osa": "obstructive sleep apnea",
+    
+    # Endocrine/Metabolic
+    "dm": "diabetes mellitus",
+    "dm2": "diabetes mellitus type 2",
+    "t2dm": "type 2 diabetes mellitus",
+    "iddm": "insulin dependent diabetes mellitus",
+    "niddm": "non-insulin dependent diabetes mellitus",
+    "hld": "hyperlipidemia",
+    
+    # Renal
+    "ckd": "chronic kidney disease",
+    "esrd": "end stage renal disease",
+    "aki": "acute kidney injury",
+    "arf": "acute renal failure",
+    "bph": "benign prostatic hyperplasia",
+    "uti": "urinary tract infection",
+    
+    # GI
+    "gerd": "gastroesophageal reflux disease",
+    "gi": "gastrointestinal",
+    "gib": "gastrointestinal bleeding",
+    "ugib": "upper gastrointestinal bleeding",
+    "lgib": "lower gastrointestinal bleeding",
+    "ibs": "irritable bowel syndrome",
+    "ibd": "inflammatory bowel disease",
+    
+    # Neurological
+    "ms": "multiple sclerosis",
+    "als": "amyotrophic lateral sclerosis",
+    "sz": "seizure",
+    "loc": "loss of consciousness",
+    
+    # Psychiatric
+    "mdd": "major depressive disorder",
+    "gad": "generalized anxiety disorder",
+    "ptsd": "post traumatic stress disorder",
+    "adhd": "attention deficit hyperactivity disorder",
+    
+    # Other common
+    "hx": "history",
+    "pmh": "past medical history",
+    "fx": "fracture",
+    "ra": "rheumatoid arthritis",
+    "oa": "osteoarthritis",
+    "sle": "systemic lupus erythematosus",
+    "hiv": "human immunodeficiency virus",
+    "aids": "acquired immunodeficiency syndrome",
+    "ca": "cancer",
+    "chemo": "chemotherapy",
+}
 
 
 @dataclass
@@ -45,6 +126,7 @@ class ExtractedChartData:
     original_name: str = ""
     original_dob: str = ""
     original_mrn: str = ""
+    account_number: str = ""  # Account/encounter number from PDF
     original_address: str = ""
     original_ssn: str = ""
     original_phone: str = ""
@@ -64,6 +146,15 @@ class ExtractedChartData:
     vitals: Dict = field(default_factory=dict)
     assessment_plan: str = ""
     clinical_notes: List[str] = field(default_factory=list)
+    
+    # Insurance/Payer info
+    insurance_name: str = ""  # Primary insurance/payer name
+    insurance_id: str = ""    # Member ID from insurance
+    insurance_group: str = "" # Group number
+    insurance_address: str = "" # Payer street/PO Box
+    insurance_city: str = ""    # Payer city
+    insurance_state: str = ""   # Payer state
+    insurance_zip: str = ""     # Payer zip
     
     # Facility info
     facility_name: str = ""
@@ -99,6 +190,107 @@ class PDFChartParser:
                 full_text += text + "\n\n"
         return full_text
     
+    def _validate_extraction_faithfulness(self, extracted_data: dict, source_text: str) -> dict:
+        """
+        Validate that extracted clinical terms appear in the source text.
+        Flags potential hallucinations where LLM added information not in source.
+        Allows bidirectional abbreviation matching (CHF ↔ congestive heart failure).
+        
+        Returns:
+            dict with validation results and faithfulness score
+        """
+        source_lower = source_text.lower()
+        
+        # Build reverse lookup (expansion -> abbreviation)
+        abbrev_to_expansion = MEDICAL_ABBREVIATIONS
+        expansion_to_abbrev = {v: k for k, v in MEDICAL_ABBREVIATIONS.items()}
+        
+        results = {
+            "conditions_validated": [],
+            "conditions_flagged": [],  # Not found in source - potential hallucination
+            "medications_validated": [],
+            "medications_flagged": [],
+            "faithfulness_score": 0.0,
+            "details": []
+        }
+        
+        def check_term_in_source(term: str) -> bool:
+            """Check if term or its abbreviation/expansion appears in source."""
+            term_lower = term.lower()
+            
+            # Direct match
+            if term_lower in source_lower:
+                return True
+            
+            # Check if term is an abbreviation with expansion in source
+            if term_lower in abbrev_to_expansion:
+                expansion = abbrev_to_expansion[term_lower]
+                if expansion in source_lower:
+                    return True
+            
+            # Check if term is an expansion with abbreviation in source
+            if term_lower in expansion_to_abbrev:
+                abbrev = expansion_to_abbrev[term_lower]
+                if abbrev in source_lower:
+                    return True
+            
+            # Partial match - check if key words from term appear
+            # (handles "diabetes mellitus type 2" matching "type 2 diabetes")
+            words = [w for w in term_lower.split() if len(w) > 3]
+            if words and all(word in source_lower for word in words):
+                return True
+            
+            # Check abbreviation variants in the term
+            for abbrev, expansion in abbrev_to_expansion.items():
+                if abbrev in term_lower:
+                    # Term contains abbreviation - check if expansion in source
+                    if expansion in source_lower:
+                        return True
+                if expansion in term_lower:
+                    # Term contains expansion - check if abbreviation in source  
+                    if abbrev in source_lower:
+                        return True
+            
+            return False
+        
+        # Check each condition against source
+        for condition in extracted_data.get("conditions", []):
+            # Remove common suffixes like "(HCC)" for matching
+            clean_condition = re.sub(r'\s*\(hcc\).*', '', condition.lower()).strip()
+            
+            if check_term_in_source(clean_condition):
+                results["conditions_validated"].append(condition)
+            else:
+                results["conditions_flagged"].append(condition)
+                results["details"].append(f"Condition not in source: {condition}")
+        
+        # Check medications
+        for med in extracted_data.get("medications", []):
+            med_name = med.get("name", "").lower() if isinstance(med, dict) else str(med).lower()
+            # Check first word of medication name (generic name)
+            first_word = med_name.split()[0] if med_name.split() else ""
+            if first_word and len(first_word) > 3 and first_word in source_lower:
+                results["medications_validated"].append(med)
+            elif med_name in source_lower:
+                results["medications_validated"].append(med)
+            else:
+                results["medications_flagged"].append(med)
+                results["details"].append(f"Medication not in source: {med_name}")
+        
+        # Calculate overall faithfulness score
+        total_conditions = len(extracted_data.get("conditions", []))
+        total_meds = len(extracted_data.get("medications", []))
+        total_items = total_conditions + total_meds
+        
+        validated_items = len(results["conditions_validated"]) + len(results["medications_validated"])
+        
+        if total_items > 0:
+            results["faithfulness_score"] = validated_items / total_items
+        else:
+            results["faithfulness_score"] = 1.0  # No items to validate
+        
+        return results
+    
     def _extract_with_llm(self, text: str) -> ExtractedChartData:
         """Use Claude to extract structured data from clinical text."""
         prompt = f"""Extract clinical data from this patient chart. Return JSON with these fields:
@@ -107,6 +299,7 @@ class PDFChartParser:
     "original_name": "patient's full name",
     "original_dob": "date of birth (MM/DD/YYYY)",
     "original_mrn": "medical record number",
+    "account_number": "account number or encounter number (look for ACCOUNT NO., Account #, Encounter, FIN, Visit Number)",
     "gender": "M or F",
     "age": 0,
     "admission_date": "first admission/observation date (MM/DD/YYYY)",
@@ -128,6 +321,13 @@ class PDFChartParser:
         "rr": "16",
         "spo2": "98"
     }},
+    "insurance_name": "primary insurance/payer name (look for INSURANCE 1, UHC, Humana, Aetna, etc.)",
+    "insurance_id": "INSURED ID number (look for INSURED ID:, Member ID, Subscriber ID - e.g. 931969345)",
+    "insurance_group": "group number (look for GRP #, Group Number)",
+    "insurance_address": "payer mailing address (look for PO BOX or street address near insurance info)",
+    "insurance_city": "payer city",
+    "insurance_state": "payer state abbreviation (2 letters)",
+    "insurance_zip": "payer zip code",
     "facility_name": "hospital name",
     "attending_physician": "doctor name"
 }}
@@ -139,6 +339,7 @@ CRITICAL INSTRUCTIONS:
 - Extract all medications with their doses
 - Extract abnormal lab values with H/L flags
 - For chief_complaint: ONLY describe what is explicitly documented, no assumptions
+- Look for INSURANCE 1 or Insurance section for payer information
 
 CHART TEXT:
 {text[:30000]}
@@ -153,33 +354,41 @@ Return ONLY valid JSON, no other text."""
         
         result_text = response["output"]["message"]["content"][0]["text"]
         
-        # Log to Langfuse if enabled
+        # Log to Langfuse if enabled (v2 API)
+        langfuse_trace = None
         if langfuse_client:
             try:
                 usage = response.get("usage", {})
-                trace = langfuse_client.trace(
+                input_truncated = prompt[:1000] + "...[truncated]"
+                output_truncated = result_text[:2000] + "...[truncated]" if len(result_text) > 2000 else result_text
+                langfuse_trace = langfuse_client.trace(
                     name="pdf-chart-extraction",
+                    input={"prompt": input_truncated},
+                    output={"response": output_truncated},
                     metadata={"model": self.model_id}
                 )
-                trace.generation(
+                langfuse_trace.generation(
                     name="extract-clinical-data",
                     model=self.model_id,
-                    input=prompt[:1000] + "...[truncated]",  # Don't log full PHI
-                    output=result_text,
+                    input=input_truncated,
+                    output=output_truncated,
                     usage={
                         "input": usage.get("inputTokens", 0),
                         "output": usage.get("outputTokens", 0)
                     }
                 )
-            except Exception:
-                pass
+                logger.info("Langfuse trace created")
+            except Exception as e:
+                logger.error(f"Langfuse error: {e}")
         
         # Parse JSON from response
+        json_valid = False
         try:
             # Find JSON in response
             json_match = re.search(r'\{[\s\S]*\}', result_text)
             if json_match:
                 data = json.loads(json_match.group())
+                json_valid = True
             else:
                 raise ValueError("No JSON found in response")
         except json.JSONDecodeError as e:
@@ -187,11 +396,65 @@ Return ONLY valid JSON, no other text."""
             print(f"Response: {result_text[:500]}")
             data = {}
         
+        # Validate faithfulness - check if extracted terms appear in source
+        faithfulness_result = self._validate_extraction_faithfulness(data, text)
+        
+        # Log and REMOVE flagged items (potential hallucinations)
+        if faithfulness_result["conditions_flagged"]:
+            logger.warning(f"REMOVING conditions not in source: {faithfulness_result['conditions_flagged']}")
+            # Keep only validated conditions
+            data["conditions"] = faithfulness_result["conditions_validated"]
+        
+        if faithfulness_result["medications_flagged"]:
+            logger.warning(f"REMOVING medications not in source: {faithfulness_result['medications_flagged']}")
+            # Keep only validated medications
+            data["medications"] = faithfulness_result["medications_validated"]
+        
+        # Score the extraction quality
+        if langfuse_trace:
+            try:
+                # JSON validity score
+                langfuse_trace.score(
+                    name="json_valid",
+                    value=1 if json_valid else 0,
+                    comment="Valid JSON extracted from LLM response"
+                )
+                
+                # Data completeness score (check key fields)
+                key_fields = ["original_name", "admission_date", "chief_complaint", "conditions"]
+                filled = sum(1 for f in key_fields if data.get(f))
+                langfuse_trace.score(
+                    name="data_completeness",
+                    value=filled / len(key_fields),
+                    comment=f"{filled}/{len(key_fields)} key fields populated"
+                )
+                
+                # Faithfulness score - did extracted terms appear in source?
+                langfuse_trace.score(
+                    name="faithfulness",
+                    value=faithfulness_result["faithfulness_score"],
+                    comment=f"Validated: {len(faithfulness_result['conditions_validated'])} conditions, {len(faithfulness_result['medications_validated'])} meds. Flagged: {len(faithfulness_result['conditions_flagged'])} conditions, {len(faithfulness_result['medications_flagged'])} meds."
+                )
+                
+                # If there are flagged items, add details
+                if faithfulness_result["details"]:
+                    langfuse_trace.score(
+                        name="hallucination_flags",
+                        value=len(faithfulness_result["conditions_flagged"]) + len(faithfulness_result["medications_flagged"]),
+                        comment="; ".join(faithfulness_result["details"][:5])  # First 5 flags
+                    )
+                
+                langfuse_client.flush()
+                logger.info("Langfuse scores sent")
+            except Exception as e:
+                logger.error(f"Langfuse scoring error: {e}")
+        
         # Convert to dataclass
         extracted = ExtractedChartData(
             original_name=data.get("original_name", ""),
             original_dob=data.get("original_dob", ""),
             original_mrn=data.get("original_mrn", ""),
+            account_number=data.get("account_number", ""),
             gender=data.get("gender", ""),
             age=data.get("age", 0),
             admission_date=data.get("admission_date", ""),
@@ -203,6 +466,13 @@ Return ONLY valid JSON, no other text."""
             medications=data.get("medications", []),
             lab_results=data.get("lab_results", []),
             vitals=data.get("vitals", {}),
+            insurance_name=data.get("insurance_name", ""),
+            insurance_id=data.get("insurance_id", ""),
+            insurance_group=data.get("insurance_group", ""),
+            insurance_address=data.get("insurance_address", ""),
+            insurance_city=data.get("insurance_city", ""),
+            insurance_state=data.get("insurance_state", ""),
+            insurance_zip=data.get("insurance_zip", ""),
             facility_name=data.get("facility_name", ""),
             attending_physician=data.get("attending_physician", "")
         )
@@ -309,18 +579,30 @@ Return ONLY valid JSON, no other text."""
                 continue
         return date_str  # Return as-is if no format matches
     
-    def deidentify(self, extracted: ExtractedChartData) -> PatientStayData:
+    def deidentify(self, extracted: ExtractedChartData, skip_deidentify: bool = False) -> PatientStayData:
         """
-        Convert extracted data to de-identified PatientStayData.
+        Convert extracted data to PatientStayData, optionally de-identified.
+        
+        Args:
+            extracted: Raw extracted data from PDF
+            skip_deidentify: If True, keep original patient name (for demos)
         
         Only replaces patient name - preserves all dates and clinical content.
         """
-        # Generate only a synthetic name
-        synthetic_name = self._generate_synthetic_name(extracted.gender)
+        # Use original name or generate synthetic
+        if skip_deidentify:
+            patient_name = extracted.original_name
+            patient_id = extracted.original_mrn or extracted.account_number
+        else:
+            patient_name = self._generate_synthetic_name(extracted.gender)
+            patient_id = self._mask_mrn(extracted.original_mrn)
         
-        # Normalize and randomize DOB (keep year for same age)
+        # Normalize and randomize DOB (keep year for same age) - only if de-identifying
         dob_normalized = self._normalize_date(extracted.original_dob)
-        dob = self._randomize_dob(dob_normalized)
+        if skip_deidentify:
+            dob = dob_normalized
+        else:
+            dob = self._randomize_dob(dob_normalized)
         admission_date = self._normalize_date(extracted.admission_date)
         observation_date = self._normalize_date(extracted.observation_date) if extracted.observation_date else ""
         inpatient_date = self._normalize_date(extracted.inpatient_date) if extracted.inpatient_date else ""
@@ -334,13 +616,21 @@ Return ONLY valid JSON, no other text."""
             except:
                 pass
         
-        # Build PatientStayData with real dates, synthetic name only
+        # Build PatientStayData
         patient_data = PatientStayData(
-            patient_id=self._mask_mrn(extracted.original_mrn),
-            patient_name=synthetic_name,
+            patient_id=patient_id,
+            patient_name=patient_name,
             dob=dob,
             gender=extracted.gender,
             age=age,
+            account_number=extracted.account_number,
+            insurance_name=extracted.insurance_name,
+            insurance_id=extracted.insurance_id,
+            insurance_group=extracted.insurance_group,
+            insurance_address=extracted.insurance_address,
+            insurance_city=extracted.insurance_city,
+            insurance_state=extracted.insurance_state,
+            insurance_zip=extracted.insurance_zip,
             admission_date=admission_date,
             observation_date=observation_date,
             inpatient_date=inpatient_date,
@@ -369,15 +659,16 @@ Return ONLY valid JSON, no other text."""
         
         return patient_data
     
-    def parse_and_deidentify(self, pdf_path: str) -> PatientStayData:
+    def parse_and_deidentify(self, pdf_path: str, skip_deidentify: bool = False) -> PatientStayData:
         """
-        Main method: Parse PDF, extract data, and return de-identified PatientStayData.
+        Main method: Parse PDF, extract data, and optionally de-identify.
         
         Args:
             pdf_path: Path to PDF clinical chart
+            skip_deidentify: If True, keep original patient name (for demos)
             
         Returns:
-            De-identified PatientStayData ready for appeal letter generation
+            PatientStayData ready for appeal letter generation
         """
         print(f"Parsing PDF: {pdf_path}")
         text = self.extract_text(pdf_path)
@@ -391,10 +682,13 @@ Return ONLY valid JSON, no other text."""
         
         print(f"Found {len(extracted.conditions)} conditions, {len(extracted.medications)} medications, {len(extracted.lab_results)} labs")
         
-        print("De-identifying patient data...")
-        patient_data = self.deidentify(extracted)
+        if skip_deidentify:
+            print("Keeping original patient name (demo mode)...")
+        else:
+            print("De-identifying patient data...")
+        patient_data = self.deidentify(extracted, skip_deidentify=skip_deidentify)
         
-        print(f"Created de-identified patient: {patient_data.patient_name}")
+        print(f"Created patient: {patient_data.patient_name}")
         return patient_data
     
     def parse_to_json(self, pdf_path: str, output_path: Optional[str] = None) -> str:

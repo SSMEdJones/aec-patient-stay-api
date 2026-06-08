@@ -132,10 +132,10 @@ $trigger = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Days 365)
 
-Register-ScheduledTask -TaskName "PatientStay-API" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
+Register-ScheduledTask -TaskName "PatientStay" -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
 
 # Start the task now
-Start-ScheduledTask -TaskName "PatientStay-API"
+Start-ScheduledTask -TaskName "PatientStay"
 ```
 
 ### Step 9: Configure AWS Credentials for SYSTEM
@@ -178,14 +178,14 @@ Start-Process "http://caps-dev.ssmhc.com/patient-stay/appeal"
 
 ### View Status
 ```powershell
-Get-ScheduledTask -TaskName "PatientStay-API"
-Get-ScheduledTask -TaskName "PatientStay-API" | Get-ScheduledTaskInfo
+Get-ScheduledTask -TaskName "PatientStay"
+Get-ScheduledTask -TaskName "PatientStay" | Get-ScheduledTaskInfo
 ```
 
 ### Restart API
 ```powershell
-Stop-ScheduledTask -TaskName "PatientStay-API"
-Start-ScheduledTask -TaskName "PatientStay-API"
+Stop-ScheduledTask -TaskName "PatientStay"
+Start-ScheduledTask -TaskName "PatientStay"
 ```
 
 ### View Logs
@@ -200,7 +200,7 @@ Get-Content "F:\inetpub-S928-STGSP3WIL2\PatientStayAPI\logs\*.log" -Tail 50
 ### API not responding (502 Bad Gateway)
 1. Check if scheduled task is running:
    ```powershell
-   Get-ScheduledTask -TaskName "PatientStay-API"
+   Get-ScheduledTask -TaskName "PatientStay"
    ```
 2. Check if port 8001 is listening:
    ```powershell
@@ -260,12 +260,12 @@ Copy-Item ".\patient-stay-deploy.zip" -Destination "\\S927-WBAPPDEV1\f$\temp\pat
 $deployPath = "F:\inetpub-S928-STGSP3WIL2\PatientStayAPI"
 
 # Stop the API
-Stop-ScheduledTask -TaskName "PatientStay-API"
+Stop-ScheduledTask -TaskName "PatientStay"
 
 # Extract update (preserve .env and .venv)
 Expand-Archive -Path "F:\temp\patient-stay-deploy.zip" -DestinationPath "F:\temp\patient-stay-extract" -Force
 Copy-Item -Path "F:\temp\patient-stay-extract\*" -Destination $deployPath -Recurse -Force
 
 # Start the API
-Start-ScheduledTask -TaskName "PatientStay-API"
+Start-ScheduledTask -TaskName "PatientStay"
 ```

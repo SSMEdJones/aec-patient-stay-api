@@ -24,8 +24,8 @@ pydantic>=2.5.0
 # Logging
 structlog>=24.1.0
 
-# LLM Observability
-langfuse>=2.0.0
+# LLM Observability (v2.x uses requests which respects REQUESTS_CA_BUNDLE)
+langfuse==2.60.4
 
 # HTTP
 requests>=2.25.0
@@ -36,6 +36,9 @@ python-multipart>=0.0.6
 
 # PDF parsing
 pdfplumber>=0.10.0
+
+# PDF generation (for synthetic test data)
+reportlab>=4.0.0
 
 # Word document generation
 python-docx>=1.0.0

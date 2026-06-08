@@ -684,10 +684,6 @@
                                     <small class="helper-text">Date converted to inpatient. Leave blank for observation-only appeals.</small>
                                 </div>
                                 <div class="form-group">
-                                    <label for="place_of_service">Place of Service</label>
-                                    <input type="text" id="place_of_service" name="place_of_service">
-                                </div>
-                                <div class="form-group">
                                     <label for="reference_number">Reference Number</label>
                                     <input type="text" id="reference_number" name="reference_number">
                                 </div>
@@ -832,7 +828,7 @@
         // Form fields for preview
         const previewFields = [
             'member_name', 'dob', 'age', 'gender', 'member_id', 'medical_history', 
-            'complaint', 'observation_date', 'inpatient_date', 'place_of_service',
+            'complaint', 'observation_date', 'inpatient_date',
             'reference_number', 'payer_name', 'street_address', 'city', 'state', 
             'zip_code', 'midnight_reason_1', 'midnight_reason_2'
         ];
@@ -915,7 +911,6 @@
             const memberId = getFieldValue('member_id') || '[Member ID]';
             const medHistory = getFieldValue('medical_history') || '[Medical History]';
             const complaint = getFieldValue('complaint') || '[Chief Complaint]';
-            const placeOfService = getFieldValue('place_of_service') || '[Place of Service]';
             const refNumber = getFieldValue('reference_number') || '[Reference #]';
             const payerName = getFieldValue('payer_name') || '[Payer Name]';
             const streetAddress = getFieldValue('street_address') || '[Street Address]';
@@ -949,7 +944,6 @@
                     <div><strong>Member ID:</strong> ${formatField(memberId)}</div>
                     <div><strong>Reference #:</strong> ${formatField(refNumber)}</div>
                     <div><strong>DOS:</strong> ${dosHeader}</div>
-                    <div><strong>Place of Service:</strong> ${formatField(placeOfService)}</div>
                 </div>
                 
                 <div class="letter-greeting">
@@ -960,18 +954,15 @@
                     <p>
                         We are writing this letter on behalf of ${formatField(memberName)}, 
                         ${article} ${formatField(age)}-year-old ${formatField(gender)} with 
-                        a past medical history of ${formatField(medHistory)}, who was seen at 
-                        ${formatField(placeOfService)} on ${formatField(dosBody)} with ${formatField(complaint)}.
+                        a past medical history of ${formatField(medHistory)}, who presented on ${formatField(dosBody)} with ${formatField(complaint)}.
                     </p>
                     
                     <p>
-                        <strong>Medical Necessity for Inpatient Admission:</strong><br>
-                        ${formatField(mn1)}.
+                        The first midnight was medically necessary for ${formatField(mn1)}.
                     </p>
                     
                     <p>
-                        <strong>Additional Clinical Justification:</strong><br>
-                        ${formatField(mn2)}.
+                        The second midnight was medically necessary for ${formatField(mn2)}.
                     </p>
                     
                     <p>
@@ -985,8 +976,7 @@
                 <div class="letter-closing">
                     <p>Respectfully submitted,</p>
                     <br>
-                    <p><strong>Physician Advisor</strong><br>
-                    ${formatField(placeOfService)}</p>
+                    <p><strong>Physician Advisor</strong></p>
                 </div>
             `;
         }
@@ -1002,7 +992,6 @@
             document.getElementById('complaint').value = data.complaint || '';
             document.getElementById('observation_date').value = data.observation_date || '';
             document.getElementById('inpatient_date').value = data.inpatient_date || '';
-            document.getElementById('place_of_service').value = data.place_of_service || '';
             document.getElementById('reference_number').value = data.reference_number || '';
             document.getElementById('payer_name').value = data.payer_name || '';
             document.getElementById('street_address').value = data.street_address || '';
@@ -1087,7 +1076,7 @@
             formData.append('ministry', ministrySelect.value);
             
             try {
-                const response = await fetch('/appeal/upload', {
+                const response = await fetch('appeal/upload', {
                     method: 'POST',
                     body: formData
                 });
@@ -1137,7 +1126,6 @@
                 complaint: document.getElementById('complaint').value,
                 observation_date: document.getElementById('observation_date').value,
                 inpatient_date: document.getElementById('inpatient_date').value,
-                place_of_service: document.getElementById('place_of_service').value,
                 reference_number: document.getElementById('reference_number').value,
                 payer_name: document.getElementById('payer_name').value,
                 street_address: document.getElementById('street_address').value,
@@ -1149,7 +1137,7 @@
             };
             
             try {
-                const response = await fetch('/appeal/generate', {
+                const response = await fetch('appeal/generate', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
@@ -1179,7 +1167,7 @@
         
         newAppealBtn.addEventListener('click', () => {
             if (currentSessionId) {
-                fetch(`/appeal/session/${currentSessionId}`, { method: 'DELETE' });
+                fetch(`appeal/session/${currentSessionId}`, { method: 'DELETE' });
             }
             
             currentSessionId = null;
@@ -1353,7 +1341,7 @@
             renderChatMessages();
             
             try {
-                const response = await fetch('/appeal/chat', {
+                const response = await fetch('appeal/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1397,7 +1385,7 @@
             renderFeedbackPrompt();
             
             try {
-                await fetch('/appeal/feedback', {
+                await fetch('appeal/feedback', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({

@@ -10,6 +10,8 @@ import jwt
 import time
 import uuid
 import urllib3
+import logging
+import os
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 from pathlib import Path
@@ -21,6 +23,8 @@ from config import (
     LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST, LANGFUSE_ENABLED
 )
 
+logger = logging.getLogger(__name__)
+
 # Disable SSL warnings for corporate networks
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -28,14 +32,17 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 langfuse_client = None
 if LANGFUSE_ENABLED:
     try:
+        os.environ.setdefault("LANGFUSE_PUBLIC_KEY", LANGFUSE_PUBLIC_KEY)
+        os.environ.setdefault("LANGFUSE_SECRET_KEY", LANGFUSE_SECRET_KEY)
+        os.environ.setdefault("LANGFUSE_HOST", LANGFUSE_HOST)
+        
         from langfuse import Langfuse
-        langfuse_client = Langfuse(
-            public_key=LANGFUSE_PUBLIC_KEY,
-            secret_key=LANGFUSE_SECRET_KEY,
-            host=LANGFUSE_HOST
-        )
-    except Exception:
-        pass
+        langfuse_client = Langfuse()
+        logger.info(f"Langfuse initialized: {LANGFUSE_HOST}")
+    except Exception as e:
+        logger.error(f"Langfuse initialization failed: {e}")
+else:
+    logger.info("Langfuse disabled (missing keys)")
 
 
 def fix_a_an_grammar(text: str) -> str:
@@ -73,6 +80,16 @@ class PatientStayData:
     dob: str = ""
     gender: str = ""
     age: int = 0
+    account_number: str = ""  # Account/encounter number for output filename
+    
+    # Insurance/Payer info
+    insurance_name: str = ""  # Primary insurance/payer name
+    insurance_id: str = ""    # Member ID from insurance
+    insurance_group: str = "" # Group number
+    insurance_address: str = "" # Payer street/PO Box
+    insurance_city: str = ""    # Payer city
+    insurance_state: str = ""   # Payer state
+    insurance_zip: str = ""     # Payer zip
     
     # Encounter info
     admission_date: str = ""
@@ -289,7 +306,7 @@ class MidnightReasonGenerator:
     - MidnightReason2 (second midnight justification)
     """
     
-    def __init__(self, model_id: str = None):
+    def __init__(self, model_id: str = None, skip_epic: bool = True):
         import boto3
         self.model_id = model_id or BEDROCK_MODEL_ID
         self.bedrock = boto3.client(
@@ -297,7 +314,16 @@ class MidnightReasonGenerator:
             region_name=AWS_REGION,
             verify=False
         )
-        self.epic_fetcher = EpicDataFetcher()
+        # Only initialize Epic fetcher if needed (not for PDF-based flow)
+        self._epic_fetcher = None
+        self._skip_epic = skip_epic
+    
+    @property
+    def epic_fetcher(self):
+        """Lazy initialization of EpicDataFetcher."""
+        if self._epic_fetcher is None and not self._skip_epic:
+            self._epic_fetcher = EpicDataFetcher()
+        return self._epic_fetcher
     
     def _call_llm(self, system_prompt: str, user_prompt: str, 
                   temperature: float = 0.3, max_tokens: int = 2000,
@@ -321,25 +347,52 @@ class MidnightReasonGenerator:
         response_body = json.loads(response["body"].read())
         output_text = response_body["content"][0]["text"]
         
-        # Log to Langfuse if enabled
+        # Log to Langfuse if enabled (v2 API)
         if langfuse_client:
             try:
+                usage = response_body.get("usage", {})
+                input_data = {"system": system_prompt[:1000], "user": user_prompt[:1000]}
+                # Don't truncate output - midnight reasons need full visibility for evaluation
                 trace = langfuse_client.trace(
                     name=trace_name,
+                    input=input_data,
+                    output={"response": output_text},
                     metadata={"model": self.model_id, "temperature": temperature}
                 )
                 trace.generation(
                     name="llm-call",
                     model=self.model_id,
-                    input={"system": system_prompt[:500], "user": user_prompt[:500]},
+                    input=input_data,
                     output=output_text,
                     usage={
-                        "input": response_body.get("usage", {}).get("input_tokens", 0),
-                        "output": response_body.get("usage", {}).get("output_tokens", 0)
+                        "input": usage.get("input_tokens", 0),
+                        "output": usage.get("output_tokens", 0)
                     }
                 )
-            except Exception:
-                pass
+                
+                # Add quality scores
+                # Output length score (reasonable length = better quality)
+                output_len = len(output_text)
+                length_score = min(1.0, output_len / 500)  # Expect ~500+ chars for good response
+                trace.score(
+                    name="output_length",
+                    value=length_score,
+                    comment=f"Output length: {output_len} chars"
+                )
+                
+                # Check for clinical justification keywords
+                justification_keywords = ["patient", "condition", "require", "monitor", "treatment"]
+                keywords_found = sum(1 for kw in justification_keywords if kw.lower() in output_text.lower())
+                trace.score(
+                    name="clinical_relevance",
+                    value=keywords_found / len(justification_keywords),
+                    comment=f"{keywords_found}/{len(justification_keywords)} clinical keywords present"
+                )
+                
+                langfuse_client.flush()
+                logger.info("Langfuse trace and scores sent")
+            except Exception as e:
+                logger.error(f"Langfuse error: {e}")
         
         return output_text
     

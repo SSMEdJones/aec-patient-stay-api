@@ -1,9 +1,9 @@
-"""
+﻿"""
 FastAPI web service for Patient Stay Summary API.
 
 Run with: uvicorn app:app --reload --port 8001
 """
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +22,27 @@ import shutil
 import uuid
 import os
 import json
+import logging
+from logging.handlers import RotatingFileHandler
+
+# Setup logging
+log_dir = Path(__file__).parent / "logs"
+log_dir.mkdir(exist_ok=True)
+
+# Configure root logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        RotatingFileHandler(
+            log_dir / "app.log",
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5
+        ),
+        logging.StreamHandler()  # Also log to console
+    ]
+)
+logger = logging.getLogger(__name__)
 
 from config import (
     DEBUG_MODE, EPIC_CLIENT_ID, EPIC_AUTHORIZE_URL, EPIC_TOKEN_URL,
@@ -52,6 +73,11 @@ app.add_middleware(
 static_path = Path(__file__).parent / "static"
 static_path.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+
+# Favicon handler to suppress browser 404 errors
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
 
 # Temp storage for uploaded PDFs and generated documents (in production, use proper storage)
 temp_storage: Dict[str, Dict] = {}
@@ -157,7 +183,6 @@ class AppealDataResponse(BaseModel):
     # Case info (editable)
     observation_date: str = ""
     inpatient_date: str = ""
-    place_of_service: str = ""
     reference_number: str = ""
     
     # Payer info (editable)
@@ -187,7 +212,6 @@ class GenerateAppealRequest(BaseModel):
     
     observation_date: str = ""
     inpatient_date: str = ""
-    place_of_service: str
     reference_number: str
     
     payer_name: str = ""
@@ -249,7 +273,7 @@ async def home():
         <head><title>Patient Stay API</title></head>
         <body>
             <h1>Patient Stay Summary API</h1>
-            <p style="color: green;">✓ Logged in as Patient: {patient_id}</p>
+            <p style="color: green;">âœ“ Logged in as Patient: {patient_id}</p>
             <p>Access Token: {current_token.get('access_token', '')[:50]}...</p>
             <ul>
                 <li><a href="/docs">API Documentation</a></li>
@@ -586,43 +610,43 @@ async def get_ministries():
 MINISTRY_CONFIG = {
     "ssm_stmarys": {
         "name": "SSM Health St. Mary's Hospital - Madison",
-        "template": "examples/Template.docx",  # Default template for now
+        "template": "appeal_templates/Template.docx",  # Default template for now
     },
     "ssm_stclare": {
         "name": "SSM Health St. Clare Hospital - Baraboo",
-        "template": "examples/Template.docx",
+        "template": "appeal_templates/Template.docx",
     },
     "ssm_stagnes": {
         "name": "SSM Health St. Agnes Hospital - Fond du Lac",
-        "template": "examples/Template.docx",
+        "template": "appeal_templates/Template.docx",
     },
     "ssm_dean": {
         "name": "SSM Health Dean Medical Group",
-        "template": "examples/Template.docx",
+        "template": "appeal_templates/Template.docx",
     },
     "ssm_stlouis": {
         "name": "SSM Health St. Louis University Hospital",
-        "template": "examples/Template.docx",
+        "template": "appeal_templates/Template.docx",
     },
     "ssm_cardinal": {
         "name": "SSM Health Cardinal Glennon Children's Hospital",
-        "template": "examples/Template.docx",
+        "template": "appeal_templates/Template.docx",
     },
     "ssm_depaul": {
         "name": "SSM Health DePaul Hospital - St. Louis",
-        "template": "examples/Template.docx",
+        "template": "appeal_templates/Template.docx",
     },
     "ssm_joseph_stcharles": {
         "name": "SSM Health St. Joseph Hospital - St. Charles",
-        "template": "examples/Template.docx",
+        "template": "appeal_templates/Template.docx",
     },
     "ssm_joseph_wentzville": {
         "name": "SSM Health St. Joseph Hospital - Wentzville",
-        "template": "examples/Template.docx",
+        "template": "appeal_templates/Template.docx",
     },
     "ssm_oklahoma": {
         "name": "SSM Health Oklahoma",
-        "template": "examples/Template.docx",
+        "template": "appeal_templates/Template.docx",
     },
 }
 
@@ -654,10 +678,14 @@ async def upload_pdf_for_appeal(
     with open(pdf_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
     
+    logger.info(f"Processing PDF upload: {file.filename} (session: {session_id}, ministry: {ministry})")
+    
     try:
-        # Parse and de-identify PDF
+        # Parse PDF - skip de-identification for demo mode (show original patient name)
         parser = PDFChartParser(use_llm=True)
-        patient_data = parser.parse_and_deidentify(str(pdf_path))
+        patient_data = parser.parse_and_deidentify(str(pdf_path), skip_deidentify=True)
+        
+        logger.info(f"Parsed patient: {patient_data.patient_name} (session: {session_id})")
         
         # Generate MidnightReason justifications
         reason_gen = MidnightReasonGenerator()
@@ -674,9 +702,8 @@ async def upload_pdf_for_appeal(
             except:
                 return d
         
-        # Generate random IDs
+        # Generate random member ID as fallback
         random_member_id = f"{random.randint(100000000, 999999999)}"
-        random_ref_num = f"A{random.randint(100000000, 999999999)}"
         
         # Format medical history from conditions
         from services.appeal_letter_generator import AppealLetterGenerator
@@ -688,7 +715,7 @@ async def upload_pdf_for_appeal(
         gender_display = "male" if gender in ("male", "m") else "female" if gender in ("female", "f") else gender
         
         # Get ministry info
-        ministry_info = MINISTRY_CONFIG.get(ministry, {"name": "", "template": "examples/Template.docx"})
+        ministry_info = MINISTRY_CONFIG.get(ministry, {"name": "", "template": "appeal_templates/Template.docx"})
         ministry_name = ministry_info["name"]
         
         # Store session data for later use
@@ -698,7 +725,27 @@ async def upload_pdf_for_appeal(
             "reason_output": reason_output,
             "ministry": ministry,
             "ministry_template": ministry_info["template"],
+            "account_number": patient_data.account_number,
+            "insurance_name": getattr(patient_data, 'insurance_name', ''),
+            "insurance_id": getattr(patient_data, 'insurance_id', ''),
         }
+        
+        # Use insurance member ID if available, otherwise account number, otherwise random
+        if getattr(patient_data, 'insurance_id', ''):
+            member_id = patient_data.insurance_id
+        elif patient_data.account_number:
+            member_id = patient_data.account_number
+        else:
+            member_id = random_member_id
+        
+        # Use extracted insurance name or default
+        payer_name = getattr(patient_data, 'insurance_name', '') or "Medicare Advantage Plan"
+        
+        # Use extracted payer address or placeholders
+        street_address = getattr(patient_data, 'insurance_address', '') or "PO Box 0000"
+        city = getattr(patient_data, 'insurance_city', '') or "City"
+        state = getattr(patient_data, 'insurance_state', '') or "ST"
+        zip_code = getattr(patient_data, 'insurance_zip', '') or "00000"
         
         return AppealDataResponse(
             session_id=session_id,
@@ -706,18 +753,17 @@ async def upload_pdf_for_appeal(
             dob=fmt_date(patient_data.dob),
             age=str(patient_data.age) if patient_data.age else "",
             gender=gender_display,
-            member_id=random_member_id,
+            member_id=member_id,
             medical_history=medical_history,
             complaint=patient_data.chief_complaint or "evaluation and management",
             observation_date=fmt_date(getattr(patient_data, 'observation_date', '')),
             inpatient_date=fmt_date(getattr(patient_data, 'inpatient_date', '')),
-            place_of_service=ministry_name,
-            reference_number=random_ref_num,
-            payer_name="Medicare Advantage Plan",
-            street_address="PO Box 0000",
-            city="City",
-            state="ST",
-            zip_code="00000",
+            reference_number="",  # User enters from denial letter
+            payer_name=payer_name,
+            street_address=street_address,
+            city=city,
+            state=state,
+            zip_code=zip_code,
             midnight_reason_1=reason_output.midnight_reason_1,
             midnight_reason_2=reason_output.midnight_reason_2,
         )
@@ -725,6 +771,7 @@ async def upload_pdf_for_appeal(
     except Exception as e:
         # Clean up on error
         shutil.rmtree(temp_dir, ignore_errors=True)
+        logger.error(f"Error processing PDF upload: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
 
 
@@ -739,7 +786,10 @@ async def generate_appeal_document(request: GenerateAppealRequest):
     from services.midnight_reason_generator import MidnightReasonOutput
     
     session_id = request.session_id
+    logger.info(f"Generating appeal document (session: {session_id}, patient: {request.member_name})")
+    
     if session_id not in temp_storage:
+        logger.warning(f"Session not found: {session_id}")
         raise HTTPException(status_code=404, detail="Session not found. Please upload PDF again.")
     
     session_data = temp_storage[session_id]
@@ -748,7 +798,7 @@ async def generate_appeal_document(request: GenerateAppealRequest):
         # Format DOS (Date of Service)
         dos_formatted = ""
         if request.observation_date and request.inpatient_date:
-            dos_formatted = f"{request.observation_date} - Observation,\n  {request.inpatient_date} – Current, Inpatient"
+            dos_formatted = f"{request.observation_date} - Observation,\n  {request.inpatient_date} â€“ Current, Inpatient"
         elif request.observation_date:
             dos_formatted = f"{request.observation_date} - Observation"
         elif request.inpatient_date:
@@ -763,7 +813,6 @@ async def generate_appeal_document(request: GenerateAppealRequest):
             member_id=request.member_id,
             medical_history=request.medical_history,
             complaint=request.complaint,
-            place_of_service=request.place_of_service,
             street_address=request.street_address,
             city=request.city,
             state=request.state,
@@ -775,12 +824,25 @@ async def generate_appeal_document(request: GenerateAppealRequest):
             midnight_reason_2=request.midnight_reason_2,
         )
         
-        # Generate output filename
+        # Generate output filename: {First Initial} {Last Name} {Account Number}.docx
         import re
-        safe_name = re.sub(r'[^\w\s-]', '', request.member_name).strip()
-        safe_name = re.sub(r'[\s]+', '_', safe_name)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"Appeal_{safe_name}_{timestamp}.docx"
+        name_parts = request.member_name.strip().split()
+        if len(name_parts) >= 2:
+            first_initial = name_parts[0][0].upper()
+            last_name = name_parts[-1]
+        else:
+            first_initial = name_parts[0][0].upper() if name_parts else "X"
+            last_name = name_parts[0] if name_parts else "Unknown"
+        
+        # Get account number from session or request member_id
+        account_number = session_data.get("account_number", "") or request.member_id
+        account_number = re.sub(r'[^\w]', '', account_number)  # Remove special chars
+        
+        if account_number:
+            filename = f"{first_initial} {last_name} {account_number}.docx"
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{first_initial} {last_name}_{timestamp}.docx"
         
         # Create output directory
         output_dir = Path(__file__).parent / "output" / "final"
@@ -788,7 +850,7 @@ async def generate_appeal_document(request: GenerateAppealRequest):
         output_path = output_dir / filename
         
         # Get ministry template from session (or use default)
-        ministry_template = session_data.get("ministry_template", "examples/Template.docx")
+        ministry_template = session_data.get("ministry_template", "appeal_templates/Template.docx")
         
         # Fill template
         letter_gen = AppealLetterGenerator(template_path=ministry_template)
@@ -798,13 +860,16 @@ async def generate_appeal_document(request: GenerateAppealRequest):
         temp_storage[session_id]["output_path"] = str(output_path)
         temp_storage[session_id]["output_filename"] = filename
         
+        logger.info(f"Generated document: {filename} (session: {session_id})")
+        
         return {
             "success": True,
             "filename": filename,
-            "download_url": f"/appeal/download/{session_id}"
+            "download_url": f"appeal/download/{session_id}"
         }
         
     except Exception as e:
+        logger.error(f"Error generating document: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error generating document: {str(e)}")
 
 
@@ -1021,6 +1086,7 @@ async def save_feedback(feedback: FeedbackExample):
         save_rag_feedback(feedback.dict())
         return {"success": True, "message": "Feedback saved for future improvements"}
     except Exception as e:
+        logger.error(f"Error saving feedback: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Could not save feedback: {str(e)}")
 
 
@@ -1038,4 +1104,5 @@ async def get_feedback(category: Optional[str] = None, limit: int = 10):
 if __name__ == "__main__":
     import uvicorn
     from config import API_PORT
+    logger.info(f"Starting Patient Stay Appeal API on port {API_PORT}")
     uvicorn.run(app, host="0.0.0.0", port=API_PORT)

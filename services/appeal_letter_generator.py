@@ -45,7 +45,6 @@ class AppealLetterData:
     # Case info
     reference_number: str = ""
     dos: str = ""  # Date of Service
-    place_of_service: str = ""  # Hospital/facility name
     
     # Generated content
     patient_background: str = ""
@@ -66,7 +65,7 @@ class AppealLetterGenerator:
         )
     """
     
-    def __init__(self, template_path: str = "examples/Template.docx"):
+    def __init__(self, template_path: str = "appeal_templates/Template.docx"):
         self.template_path = Path(template_path)
         if not self.template_path.exists():
             raise FileNotFoundError(f"Template not found: {template_path}")
@@ -123,7 +122,6 @@ class AppealLetterGenerator:
             "[MemberID]": data.member_id,
             "[MedicalHistory]": data.medical_history,
             "[Complaint]": data.complaint,
-            "[PlaceofService]": data.place_of_service,
             "[Street Address]": data.street_address,
             "[City]": data.city,
             "[State]": data.state,
