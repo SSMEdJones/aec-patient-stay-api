@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Appeal Letter Generator</title>
+    <title>Medicare Appeal Letter Generator</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M11.25 4.533A9.707 9.707 0 006 3a9.735 9.735 0 00-3.25.555.75.75 0 00-.5.707v14.25a.75.75 0 001 .707A8.237 8.237 0 016 18.75c1.995 0 3.823.707 5.25 1.886V4.533zM12.75 20.636A8.214 8.214 0 0118 18.75c.966 0 1.89.166 2.75.47a.75.75 0 001-.708V4.262a.75.75 0 00-.5-.707A9.735 9.735 0 0018 3a9.707 9.707 0 00-5.25 1.533v16.103z'/%3E%3C/svg%3E">
     <style>
         :root {
             --primary-color: #2563eb;
@@ -44,6 +45,30 @@
             margin-bottom: 1.5rem;
             border-radius: 12px;
             box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .header-logo {
+            width: 48px;
+            height: 48px;
+            background: white;
+            border-radius: 10px;
+            padding: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .header-logo svg {
+            width: 32px;
+            height: 32px;
+            color: var(--primary-color);
+        }
+        
+        .header-text {
+            flex: 1;
         }
         
         header h1 {
@@ -549,8 +574,15 @@
 <body>
     <div class="container">
         <header>
-            <h1>Medicare Appeal Letter Generator</h1>
-            <p>Upload a clinical PDF, review and edit the extracted data, then download the completed appeal letter.</p>
+            <div class="header-logo">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M11.25 4.533A9.707 9.707 0 006 3a9.735 9.735 0 00-3.25.555.75.75 0 00-.5.707v14.25a.75.75 0 001 .707A8.237 8.237 0 016 18.75c1.995 0 3.823.707 5.25 1.886V4.533zM12.75 20.636A8.214 8.214 0 0118 18.75c.966 0 1.89.166 2.75.47a.75.75 0 001-.708V4.262a.75.75 0 00-.5-.707A9.735 9.735 0 0018 3a9.707 9.707 0 00-5.25 1.533v16.103z" />
+                </svg>
+            </div>
+            <div class="header-text">
+                <h1>Medicare Appeal Letter Generator</h1>
+                <p>Upload a clinical PDF, review and edit the extracted data, then download the completed appeal letter.</p>
+            </div>
         </header>
         
         <div class="step-indicator">
@@ -601,6 +633,7 @@
                         <option value="ssm_depaul">SSM Health DePaul Hospital - St. Louis</option>
                         <option value="ssm_joseph_stcharles">SSM Health St. Joseph Hospital - St. Charles</option>
                         <option value="ssm_joseph_wentzville">SSM Health St. Joseph Hospital - Wentzville</option>
+                        <option value="ssm_joseph_lakestlouis">SSM Health St. Joseph Hospital - Lake St. Louis</option>
                         <option value="ssm_oklahoma">SSM Health Oklahoma</option>
                     </select>
                 </div>
@@ -672,6 +705,11 @@
                         <!-- Case Information -->
                         <div class="card">
                             <h2>Case Information</h2>
+                            <div class="form-group full-width">
+                                <label for="place_of_service">Place of Service</label>
+                                <input type="text" id="place_of_service" name="place_of_service" placeholder="emergency department">
+                                <small class="helper-text">Department type: emergency department, hospital, urgent care, clinic</small>
+                            </div>
                             <div class="compact-row">
                                 <div class="form-group">
                                     <label for="observation_date">Observation Date</label>
@@ -828,7 +866,7 @@
         // Form fields for preview
         const previewFields = [
             'member_name', 'dob', 'age', 'gender', 'member_id', 'medical_history', 
-            'complaint', 'observation_date', 'inpatient_date',
+            'complaint', 'place_of_service', 'observation_date', 'inpatient_date',
             'reference_number', 'payer_name', 'street_address', 'city', 'state', 
             'zip_code', 'midnight_reason_1', 'midnight_reason_2'
         ];
@@ -903,6 +941,15 @@
             return '[Date of Service]';
         }
         
+        function getMinistryName() {
+            // Use place_of_service field (emergency department, hospital, etc.)
+            const placeOfService = document.getElementById('place_of_service');
+            if (placeOfService && placeOfService.value.trim()) {
+                return placeOfService.value.trim();
+            }
+            return 'emergency department';
+        }
+        
         function updatePreview() {
             const memberName = getFieldValue('member_name') || '[Member Name]';
             const dob = getFieldValue('dob') || '[DOB]';
@@ -954,7 +1001,7 @@
                     <p>
                         We are writing this letter on behalf of ${formatField(memberName)}, 
                         ${article} ${formatField(age)}-year-old ${formatField(gender)} with 
-                        a past medical history of ${formatField(medHistory)}, who presented on ${formatField(dosBody)} with ${formatField(complaint)}.
+                        a past medical history of ${formatField(medHistory)}, who presented to the ${formatField(getMinistryName())} with complaints of ${formatField(complaint)}.
                     </p>
                     
                     <p>
@@ -990,6 +1037,7 @@
             document.getElementById('member_id').value = data.member_id || '';
             document.getElementById('medical_history').value = data.medical_history || '';
             document.getElementById('complaint').value = data.complaint || '';
+            document.getElementById('place_of_service').value = data.place_of_service || '';
             document.getElementById('observation_date').value = data.observation_date || '';
             document.getElementById('inpatient_date').value = data.inpatient_date || '';
             document.getElementById('reference_number').value = data.reference_number || '';
@@ -1056,6 +1104,7 @@
         
         // Ministry selection handler
         ministrySelect.addEventListener('change', checkUploadReady);
+        ministrySelect.addEventListener('change', updatePreview);
         
         uploadBtn.addEventListener('click', async () => {
             if (!selectedFile) {
@@ -1101,11 +1150,19 @@
         });
         
         backBtn.addEventListener('click', () => {
+            // Delete current session to free resources
+            if (currentSessionId) {
+                fetch(`appeal/session/${currentSessionId}`, { method: 'DELETE' });
+                currentSessionId = null;
+            }
+            
             setStep(1);
             fileInput.value = '';
             selectedFile = null;
             selectedFileDiv.style.display = 'none';
             uploadBtn.disabled = true;
+            ministrySelect.selectedIndex = 0;  // Reset ministry dropdown
+            appealForm.reset();
         });
         
         appealForm.addEventListener('submit', async (e) => {
@@ -1175,6 +1232,7 @@
             selectedFile = null;
             selectedFileDiv.style.display = 'none';
             uploadBtn.disabled = true;
+            ministrySelect.selectedIndex = 0;  // Reset ministry dropdown
             appealForm.reset();
             setStep(1);
         });

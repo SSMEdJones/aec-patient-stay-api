@@ -45,6 +45,7 @@ class AppealLetterData:
     # Case info
     reference_number: str = ""
     dos: str = ""  # Date of Service
+    place_of_service: str = ""  # Hospital/facility name
     
     # Generated content
     patient_background: str = ""
@@ -122,6 +123,7 @@ class AppealLetterGenerator:
             "[MemberID]": data.member_id,
             "[MedicalHistory]": data.medical_history,
             "[Complaint]": data.complaint,
+            "[PlaceofService]": data.place_of_service or "Hospital",
             "[Street Address]": data.street_address,
             "[City]": data.city,
             "[State]": data.state,
@@ -250,7 +252,15 @@ class AppealLetterGenerator:
                 seen.add(item.lower())
                 unique.append(item)
         
-        return ", ".join(unique) if unique else "See clinical documentation"
+        # Format with proper grammar: "A, B, and C"
+        if len(unique) == 0:
+            return "See clinical documentation"
+        elif len(unique) == 1:
+            return unique[0]
+        elif len(unique) == 2:
+            return f"{unique[0]} and {unique[1]}"
+        else:
+            return ", ".join(unique[:-1]) + ", and " + unique[-1]
     
     def generate(
         self,

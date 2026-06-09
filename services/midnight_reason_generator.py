@@ -91,11 +91,16 @@ class PatientStayData:
     insurance_state: str = ""   # Payer state
     insurance_zip: str = ""     # Payer zip
     
+    # Facility info
+    facility_name: str = ""  # Hospital/facility name from PDF
+    
     # Encounter info
     admission_date: str = ""
     observation_date: str = ""  # Date of observation status
     inpatient_date: str = ""    # Date transitioned to inpatient
-    chief_complaint: str = ""
+    place_of_service: str = ""  # emergency department, hospital, urgent care, etc.
+    chief_complaint_short: str = ""  # Brief symptom list: "abdominal pain, nausea, vomiting"
+    chief_complaint: str = ""  # Full narrative for letter body
     encounter_status: str = ""
     
     # Clinical data
@@ -327,8 +332,14 @@ class MidnightReasonGenerator:
     
     def _call_llm(self, system_prompt: str, user_prompt: str, 
                   temperature: float = 0.3, max_tokens: int = 2000,
-                  trace_name: str = "midnight-reason") -> str:
-        """Call AWS Bedrock Claude model."""
+                  trace_name: str = "midnight-reason",
+                  patient_context: dict = None) -> str:
+        """Call AWS Bedrock Claude model.
+        
+        Args:
+            patient_context: Optional dict with patient data for Langfuse tracing.
+                             Should include conditions, medications, labs for faithfulness checks.
+        """
         request_body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": max_tokens,
@@ -351,7 +362,15 @@ class MidnightReasonGenerator:
         if langfuse_client:
             try:
                 usage = response_body.get("usage", {})
-                input_data = {"system": system_prompt[:1000], "user": user_prompt[:1000]}
+                # Use patient_context if provided for better faithfulness evaluation
+                if patient_context:
+                    input_data = {
+                        "patient_data": patient_context,
+                        "prompt_preview": user_prompt[:500]
+                    }
+                else:
+                    input_data = {"system": system_prompt[:1000], "user": user_prompt[:1000]}
+                
                 # Don't truncate output - midnight reasons need full visibility for evaluation
                 trace = langfuse_client.trace(
                     name=trace_name,
@@ -530,7 +549,15 @@ If specific data is not available (like medications or imaging), use clinically 
 For conditions like pneumonia, assume appropriate IV antibiotics. For pain, assume appropriate analgesia.
 Follow the format and style of formal Medicare appeal letters."""
 
-        response = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=2000)
+        # Create patient context for Langfuse faithfulness evaluation
+        patient_context = {
+            "conditions": patient_data.conditions,
+            "medications": [m.get("name", "") for m in patient_data.medications],
+            "lab_results": [f"{l.get('name', '')}: {l.get('value', '')} {l.get('unit', '')}" for l in patient_data.lab_results],
+            "chief_complaint": patient_data.chief_complaint
+        }
+
+        response = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=2000, patient_context=patient_context)
         
         # Parse JSON response
         try:
@@ -635,7 +662,15 @@ These will be inserted after "The first/second midnight was medically necessary 
 If specific data is not available (like medications or imaging), use clinically reasonable language to indicate what would typically be required for the documented conditions.
 Follow the format and style of formal Medicare appeal letters."""
 
-        response = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=2000)
+        # Create patient context for Langfuse faithfulness evaluation
+        patient_context = {
+            "conditions": patient_data.conditions,
+            "medications": [m.get("name", "") for m in patient_data.medications],
+            "lab_results": [f"{l.get('name', '')}: {l.get('value', '')} {l.get('unit', '')}" for l in patient_data.lab_results],
+            "chief_complaint": patient_data.chief_complaint
+        }
+
+        response = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=2000, patient_context=patient_context)
         
         # Parse JSON response
         try:

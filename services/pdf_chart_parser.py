@@ -118,6 +118,28 @@ MEDICAL_ABBREVIATIONS = {
     "chemo": "chemotherapy",
 }
 
+# Compound word equivalences (space vs no space, hyphenated variants)
+COMPOUND_EQUIVALENCES = {
+    "cerebrovascular": ["cerebral vascular", "cerebro-vascular", "cerebro vascular"],
+    "cardiovascular": ["cardio vascular", "cardio-vascular"],
+    "gastrointestinal": ["gastro intestinal", "gastro-intestinal", "gi"],
+    "musculoskeletal": ["musculo skeletal", "musculo-skeletal"],
+    "genitourinary": ["genito urinary", "genito-urinary", "gu"],
+    "hepatobiliary": ["hepato biliary", "hepato-biliary"],
+    "bronchopulmonary": ["broncho pulmonary", "broncho-pulmonary"],
+    "nephrotoxic": ["nephro toxic", "nephro-toxic"],
+    "cardiotoxic": ["cardio toxic", "cardio-toxic"],
+    "neurovascular": ["neuro vascular", "neuro-vascular"],
+    "atherosclerotic": ["athero sclerotic", "athero-sclerotic"],
+    "hyperglycemia": ["hyper glycemia", "elevated glucose", "high blood sugar"],
+    "hypoglycemia": ["hypo glycemia", "low blood sugar"],
+    "hypertension": ["high blood pressure", "elevated blood pressure", "elevated bp"],
+    "hypotension": ["low blood pressure"],
+    "tachycardia": ["rapid heart rate", "elevated heart rate"],
+    "bradycardia": ["slow heart rate", "low heart rate"],
+    "dyspnea": ["shortness of breath", "difficulty breathing", "sob"],
+}
+
 
 @dataclass
 class ExtractedChartData:
@@ -138,7 +160,9 @@ class ExtractedChartData:
     admission_date: str = ""
     observation_date: str = ""  # Date of observation status
     inpatient_date: str = ""    # Date transitioned to inpatient
-    chief_complaint: str = ""
+    place_of_service: str = ""  # emergency department, hospital, urgent care, etc.
+    chief_complaint_short: str = ""  # Short symptom list: "abdominal pain, nausea, vomiting"
+    chief_complaint: str = ""  # Full narrative for letter body
     hpi: str = ""
     conditions: List[str] = field(default_factory=list)
     medications: List[Dict] = field(default_factory=list)
@@ -205,6 +229,12 @@ class PDFChartParser:
         abbrev_to_expansion = MEDICAL_ABBREVIATIONS
         expansion_to_abbrev = {v: k for k, v in MEDICAL_ABBREVIATIONS.items()}
         
+        # Build reverse lookup for compound equivalences
+        compound_reverse = {}
+        for main_term, variants in COMPOUND_EQUIVALENCES.items():
+            for variant in variants:
+                compound_reverse[variant] = main_term
+        
         results = {
             "conditions_validated": [],
             "conditions_flagged": [],  # Not found in source - potential hallucination
@@ -221,6 +251,17 @@ class PDFChartParser:
             # Direct match
             if term_lower in source_lower:
                 return True
+            
+            # Check compound word equivalences (cerebrovascular ↔ cerebral vascular)
+            if term_lower in COMPOUND_EQUIVALENCES:
+                for variant in COMPOUND_EQUIVALENCES[term_lower]:
+                    if variant in source_lower:
+                        return True
+            # Also check reverse (if extracted term is a variant)
+            if term_lower in compound_reverse:
+                main_term = compound_reverse[term_lower]
+                if main_term in source_lower:
+                    return True
             
             # Check if term is an abbreviation with expansion in source
             if term_lower in abbrev_to_expansion:
@@ -305,14 +346,15 @@ class PDFChartParser:
     "admission_date": "first admission/observation date (MM/DD/YYYY)",
     "observation_date": "date patient was on observation status - usually first day (MM/DD/YYYY or null if not mentioned)",
     "inpatient_date": "date patient transitioned to inpatient status - usually day after observation (MM/DD/YYYY or null if not mentioned)",
-    "chief_complaint": "synthesize ALL HPI sections into one clinical presentation in PAST TENSE: start with 'complaints of [symptoms]', then 'The patient reported [timeline and details]', include failed home treatments, relevant history (e.g. prior procedures, never had colonoscopy), and end with 'Given [reasons], hospital admission was medically necessary for further evaluation and management.' (3-5 sentences)",
-    "hpi": "history of present illness summary (1-2 sentences)",
-    "conditions": ["CHRONIC DISEASES ONLY for past medical history: diabetes, hypertension, CKD, CHF, COPD, hypothyroidism, hyperthyroidism, hyperlipidemia, celiac disease, CAD, AFib, TIA/stroke, cancer history, etc. Do NOT include acute symptoms like nausea, vomiting, abdominal pain, constipation, diarrhea - those belong in chief_complaint. Mark HCC conditions."],
+    "place_of_service": "Look for 'ED Provider Notes', 'Service: Emergency Medicine', 'EMERGENCY DEPARTMENT ENCOUNTER' → use 'emergency department'. Otherwise use 'hospital' for inpatient, 'urgent care', or 'clinic' based on chart",
+    "chief_complaint": "VERBATIM extraction from CHIEF COMPLAINT and HPI sections. Use PAST TENSE. Start with symptom list from chart (e.g. 'flank pain and hematuria'), then add ONLY facts stated in HPI (timeline, severity, associated symptoms). Do NOT add interpretive language or conclusions not in source. Do NOT end with 'hospital admission was medically necessary' unless that exact phrase appears in chart.",
+    "hpi": "history of present illness summary - VERBATIM from chart (1-2 sentences)",
+    "conditions": ["CHRONIC DISEASES ONLY from PAST MEDICAL HISTORY section. Extract EXACTLY as written. Do NOT include acute symptoms."],
     "medications": [
         {{"name": "drug name", "dose": "dose", "route": "PO/IV/etc", "frequency": "frequency"}}
     ],
     "lab_results": [
-        {{"name": "test name", "value": "result", "unit": "unit", "flag": "H/L/normal"}}
+        {{"name": "test name", "value": "result from LAB TABLE ONLY", "unit": "unit", "flag": "ONLY 'H' or 'L' if EXPLICITLY marked in chart, otherwise leave BLANK"}}
     ],
     "vitals": {{
         "bp": "120/80",
@@ -333,13 +375,18 @@ class PDFChartParser:
 }}
 
 CRITICAL INSTRUCTIONS:
+- VERBATIM EXTRACTION: Copy text exactly as written. Do NOT paraphrase, summarize, or add interpretive content.
+- LAB VALUES: Extract ONLY from structured lab tables. If a value appears in narrative text differently, note discrepancy but use table value.
+- LAB FLAGS: Only mark 'H' or 'L' if explicitly shown next to value. Do NOT infer flags - leave blank if not marked.
+- CONDITIONS: Extract ONLY from PAST MEDICAL HISTORY section, not from narrative or assessment.
 - ONLY include information explicitly stated in the chart - do NOT infer or make up findings
 - Do NOT add clinical findings like tachycardia, fever, hypotension unless explicitly documented with values
-- Include ALL conditions mentioned, especially those marked (HCC)
-- Extract all medications with their doses
-- Extract abnormal lab values with H/L flags
-- For chief_complaint: ONLY describe what is explicitly documented, no assumptions
+- Extract conditions EXACTLY as written in PAST MEDICAL HISTORY
+- Extract all medications with their doses exactly as listed
+- Lab flags: ONLY use H/L if explicitly marked, otherwise leave flag field empty string
+- chief_complaint: Extract VERBATIM from chart, do not add interpretive narrative
 - Look for INSURANCE 1 or Insurance section for payer information
+- For place_of_service: Look for 'ED Provider Notes', 'Service: Emergency Medicine', 'EMERGENCY DEPARTMENT' → 'emergency department'
 
 CHART TEXT:
 {text[:30000]}
@@ -353,38 +400,11 @@ Return ONLY valid JSON, no other text."""
         )
         
         result_text = response["output"]["message"]["content"][0]["text"]
+        usage = response.get("usage", {})
         
-        # Log to Langfuse if enabled (v2 API)
-        langfuse_trace = None
-        if langfuse_client:
-            try:
-                usage = response.get("usage", {})
-                input_truncated = prompt[:1000] + "...[truncated]"
-                output_truncated = result_text[:2000] + "...[truncated]" if len(result_text) > 2000 else result_text
-                langfuse_trace = langfuse_client.trace(
-                    name="pdf-chart-extraction",
-                    input={"prompt": input_truncated},
-                    output={"response": output_truncated},
-                    metadata={"model": self.model_id}
-                )
-                langfuse_trace.generation(
-                    name="extract-clinical-data",
-                    model=self.model_id,
-                    input=input_truncated,
-                    output=output_truncated,
-                    usage={
-                        "input": usage.get("inputTokens", 0),
-                        "output": usage.get("outputTokens", 0)
-                    }
-                )
-                logger.info("Langfuse trace created")
-            except Exception as e:
-                logger.error(f"Langfuse error: {e}")
-        
-        # Parse JSON from response
+        # Parse JSON from response first (need for validation)
         json_valid = False
         try:
-            # Find JSON in response
             json_match = re.search(r'\{[\s\S]*\}', result_text)
             if json_match:
                 data = json.loads(json_match.group())
@@ -398,6 +418,78 @@ Return ONLY valid JSON, no other text."""
         
         # Validate faithfulness - check if extracted terms appear in source
         faithfulness_result = self._validate_extraction_faithfulness(data, text)
+        
+        # Log to Langfuse with full audit trail
+        langfuse_trace = None
+        if langfuse_client:
+            try:
+                # Extract key source excerpts for verification (searchable in Langfuse)
+                source_excerpts = {
+                    "patient_info": text[:800],  # First 800 chars usually have demographics
+                    "conditions_section": "",
+                    "insurance_section": "",
+                    "medications_section": "",
+                    "labs_section": "",
+                    "assessment_section": "",
+                }
+                
+                # Find past medical history / conditions section
+                pmh_match = re.search(r'(PAST MEDICAL HISTORY|MEDICAL HISTORY|PMH|CONDITIONS).{0,800}', text, re.IGNORECASE | re.DOTALL)
+                if pmh_match:
+                    source_excerpts["conditions_section"] = pmh_match.group()
+                
+                # Find insurance section
+                ins_match = re.search(r'INSURANCE.{0,500}', text, re.IGNORECASE | re.DOTALL)
+                if ins_match:
+                    source_excerpts["insurance_section"] = ins_match.group()
+                
+                # Find medications section
+                med_match = re.search(r'(HOME MEDICATIONS|MEDICATIONS|CURRENT MEDS).{0,800}', text, re.IGNORECASE | re.DOTALL)
+                if med_match:
+                    source_excerpts["medications_section"] = med_match.group()
+                
+                # Find labs section  
+                lab_match = re.search(r'(LABORATORY|LAB RESULTS|LABS).{0,600}', text, re.IGNORECASE | re.DOTALL)
+                if lab_match:
+                    source_excerpts["labs_section"] = lab_match.group()
+                
+                # Find assessment/plan section
+                assess_match = re.search(r'(ASSESSMENT|PLAN|A/P).{0,600}', text, re.IGNORECASE | re.DOTALL)
+                if assess_match:
+                    source_excerpts["assessment_section"] = assess_match.group()
+                
+                langfuse_trace = langfuse_client.trace(
+                    name="pdf-chart-extraction",
+                    input={
+                        "pdf_length_chars": len(text),
+                        "source_excerpts": source_excerpts,  # Key sections for audit
+                        "full_source_text": text[:15000],  # First 15K chars for full audit trail
+                    },
+                    output={
+                        "extracted_data": data,
+                        "faithfulness_validation": {
+                            "score": faithfulness_result["faithfulness_score"],
+                            "conditions_validated": faithfulness_result["conditions_validated"],
+                            "conditions_flagged": faithfulness_result["conditions_flagged"],
+                            "medications_validated": len(faithfulness_result["medications_validated"]),
+                            "medications_flagged": [m.get("name", str(m)) for m in faithfulness_result["medications_flagged"]],
+                        }
+                    },
+                    metadata={"model": self.model_id}
+                )
+                langfuse_trace.generation(
+                    name="extract-clinical-data",
+                    model=self.model_id,
+                    input=prompt,  # Full prompt for audit
+                    output=result_text,
+                    usage={
+                        "input": usage.get("inputTokens", 0),
+                        "output": usage.get("outputTokens", 0)
+                    }
+                )
+                logger.info("Langfuse trace created")
+            except Exception as e:
+                logger.error(f"Langfuse error: {e}")
         
         # Log and REMOVE flagged items (potential hallucinations)
         if faithfulness_result["conditions_flagged"]:
@@ -460,6 +552,8 @@ Return ONLY valid JSON, no other text."""
             admission_date=data.get("admission_date", ""),
             observation_date=data.get("observation_date", ""),
             inpatient_date=data.get("inpatient_date", ""),
+            place_of_service=data.get("place_of_service", "emergency department"),
+            chief_complaint_short=data.get("chief_complaint_short", ""),
             chief_complaint=data.get("chief_complaint", ""),
             hpi=data.get("hpi", ""),
             conditions=data.get("conditions", []),
@@ -635,6 +729,8 @@ Return ONLY valid JSON, no other text."""
             observation_date=observation_date,
             inpatient_date=inpatient_date,
             encounter_status="in-progress",
+            place_of_service=extracted.place_of_service or "emergency department",
+            chief_complaint_short=extracted.chief_complaint_short,
             chief_complaint=extracted.chief_complaint,
             conditions=extracted.conditions,
             medications=[

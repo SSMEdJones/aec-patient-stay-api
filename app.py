@@ -177,16 +177,19 @@ class AppealDataResponse(BaseModel):
     age: str = ""
     gender: str = ""
     member_id: str = ""
+    account_number: str = ""  # Account/encounter number from PDF
     medical_history: str = ""
     complaint: str = ""
     
     # Case info (editable)
+    place_of_service: str = ""  # emergency department, hospital, etc.
     observation_date: str = ""
     inpatient_date: str = ""
     reference_number: str = ""
     
     # Payer info (editable)
     payer_name: str = ""
+    insurance_name: str = ""  # Original extracted insurance name
     street_address: str = ""
     city: str = ""
     state: str = ""
@@ -195,6 +198,9 @@ class AppealDataResponse(BaseModel):
     # Generated content (editable)
     midnight_reason_1: str = ""
     midnight_reason_2: str = ""
+    
+    # Lab results from PDF
+    lab_results: List[Dict] = []
 
 
 class GenerateAppealRequest(BaseModel):
@@ -210,6 +216,7 @@ class GenerateAppealRequest(BaseModel):
     medical_history: str
     complaint: str
     
+    place_of_service: str = ""
     observation_date: str = ""
     inpatient_date: str = ""
     reference_number: str
@@ -644,6 +651,10 @@ MINISTRY_CONFIG = {
         "name": "SSM Health St. Joseph Hospital - Wentzville",
         "template": "appeal_templates/Template.docx",
     },
+    "ssm_joseph_lakestlouis": {
+        "name": "SSM Health St. Joseph Hospital - Lake St. Louis",
+        "template": "appeal_templates/Template.docx",
+    },
     "ssm_oklahoma": {
         "name": "SSM Health Oklahoma",
         "template": "appeal_templates/Template.docx",
@@ -714,9 +725,12 @@ async def upload_pdf_for_appeal(
         gender = patient_data.gender.lower() if patient_data.gender else ""
         gender_display = "male" if gender in ("male", "m") else "female" if gender in ("female", "f") else gender
         
-        # Get ministry info
+        # Get ministry info (for template selection)
         ministry_info = MINISTRY_CONFIG.get(ministry, {"name": "", "template": "appeal_templates/Template.docx"})
         ministry_name = ministry_info["name"]
+        
+        # Place of service from PDF extraction (emergency department, hospital, etc.)
+        place_of_service = getattr(patient_data, 'place_of_service', '') or 'emergency department'
         
         # Store session data for later use
         temp_storage[session_id] = {
@@ -724,6 +738,7 @@ async def upload_pdf_for_appeal(
             "patient_data": patient_data,
             "reason_output": reason_output,
             "ministry": ministry,
+            "ministry_name": ministry_name,  # Hospital name for letterhead/signing
             "ministry_template": ministry_info["template"],
             "account_number": patient_data.account_number,
             "insurance_name": getattr(patient_data, 'insurance_name', ''),
@@ -754,18 +769,22 @@ async def upload_pdf_for_appeal(
             age=str(patient_data.age) if patient_data.age else "",
             gender=gender_display,
             member_id=member_id,
+            account_number=patient_data.account_number or "",
             medical_history=medical_history,
             complaint=patient_data.chief_complaint or "evaluation and management",
+            place_of_service=getattr(patient_data, 'place_of_service', '') or place_of_service,
             observation_date=fmt_date(getattr(patient_data, 'observation_date', '')),
             inpatient_date=fmt_date(getattr(patient_data, 'inpatient_date', '')),
             reference_number="",  # User enters from denial letter
             payer_name=payer_name,
+            insurance_name=getattr(patient_data, 'insurance_name', '') or "",
             street_address=street_address,
             city=city,
             state=state,
             zip_code=zip_code,
             midnight_reason_1=reason_output.midnight_reason_1,
             midnight_reason_2=reason_output.midnight_reason_2,
+            lab_results=patient_data.lab_results or [],
         )
         
     except Exception as e:
@@ -813,6 +832,7 @@ async def generate_appeal_document(request: GenerateAppealRequest):
             member_id=request.member_id,
             medical_history=request.medical_history,
             complaint=request.complaint,
+            place_of_service=request.place_of_service or "emergency department",
             street_address=request.street_address,
             city=request.city,
             state=request.state,
