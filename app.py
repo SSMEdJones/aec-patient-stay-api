@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 from config import (
     DEBUG_MODE, EPIC_CLIENT_ID, EPIC_AUTHORIZE_URL, EPIC_TOKEN_URL,
-    EPIC_REDIRECT_URI, EPIC_SCOPE, EPIC_BASE_URL
+    EPIC_REDIRECT_URI, EPIC_SCOPE, EPIC_BASE_URL, LANGFUSE_HOST, LANGFUSE_PROJECT_ID
 )
 from models import PatientStaySummary, ClinicalNote, NoteType
 
@@ -732,6 +732,12 @@ async def upload_pdf_for_appeal(
         # Place of service from PDF extraction (emergency department, hospital, etc.)
         place_of_service = getattr(patient_data, 'place_of_service', '') or 'emergency department'
         
+        # Get debug data from parser for verification UI
+        debug_data = parser.get_debug_data()
+        
+        # Get debug data from midnight reason generator
+        midnight_debug_data = reason_gen.get_debug_data()
+        
         # Store session data for later use
         temp_storage[session_id] = {
             "pdf_path": str(pdf_path),
@@ -743,6 +749,10 @@ async def upload_pdf_for_appeal(
             "account_number": patient_data.account_number,
             "insurance_name": getattr(patient_data, 'insurance_name', ''),
             "insurance_id": getattr(patient_data, 'insurance_id', ''),
+            # Debug data for extraction verification
+            "debug_data": debug_data,
+            # Debug data for midnight reason generation
+            "midnight_debug_data": midnight_debug_data,
         }
         
         # Use insurance member ID if available, otherwise account number, otherwise random
@@ -925,6 +935,80 @@ async def cleanup_session(session_id: str):
             shutil.rmtree(temp_dir, ignore_errors=True)
     
     return {"success": True, "message": "Session cleaned up"}
+
+
+@app.get("/appeal/debug/{session_id}", tags=["Appeal"])
+async def get_extraction_debug(session_id: str):
+    """
+    Get extraction debug data for verification UI.
+    
+    Returns source text and faithfulness validation results so users can
+    verify Langfuse claims against the actual PDF content.
+    """
+    if session_id not in temp_storage:
+        raise HTTPException(status_code=404, detail="Session not found. Please upload a PDF first.")
+    
+    session_data = temp_storage[session_id]
+    debug_data = session_data.get("debug_data", {})
+    midnight_debug_data = session_data.get("midnight_debug_data", {})
+    patient_data = session_data.get("patient_data")
+    
+    # Get patient name for display
+    patient_name = ""
+    if patient_data:
+        patient_name = getattr(patient_data, 'patient_name', '') or ''
+    
+    # Build Langfuse URL - link to LLM-as-a-Judge evals page
+    extraction_timestamp = debug_data.get("extraction_timestamp", "")
+    # Use configured project ID, fall back to placeholder if not set
+    project_id = LANGFUSE_PROJECT_ID or "YOUR_PROJECT_ID"
+    langfuse_base = LANGFUSE_HOST.rstrip('/')
+    # Link to evals page for LLM-as-a-Judge scores
+    langfuse_trace_url = f"{langfuse_base}/project/{project_id}/evals"
+    
+    return {
+        "session_id": session_id,
+        "patient_name": patient_name,
+        "extraction_timestamp": extraction_timestamp,
+        # PDF Extraction debug (pdf_chart_parser)
+        "faithfulness_score": debug_data.get("faithfulness_score", 0),
+        "conditions_validated": debug_data.get("conditions_validated", []),
+        "conditions_flagged": debug_data.get("conditions_flagged", []),
+        "medications_validated": debug_data.get("medications_validated", []),
+        "medications_flagged": debug_data.get("medications_flagged", []),
+        "lab_results_validated": debug_data.get("lab_results_validated", []),
+        "lab_results_flagged": debug_data.get("lab_results_flagged", []),
+        "source_text": debug_data.get("source_text", ""),
+        "details": debug_data.get("details", []),
+        "langfuse_trace_url": langfuse_trace_url,
+        # Midnight Reason Generation debug (midnight_reason_generator)
+        "midnight_debug": {
+            "input_conditions": midnight_debug_data.get("input_conditions", []),
+            "input_medications": midnight_debug_data.get("input_medications", []),
+            "generated_text": midnight_debug_data.get("generated_text", ""),
+            "conditions_used": midnight_debug_data.get("conditions_used", []),
+            "conditions_hallucinated": midnight_debug_data.get("conditions_hallucinated", []),
+            "generation_timestamp": midnight_debug_data.get("generation_timestamp", ""),
+        }
+    }
+
+
+@app.get("/appeal/debug", response_class=HTMLResponse, tags=["Appeal"])
+async def debug_ui():
+    """Serve the Extraction Debug & Verification UI."""
+    ui_path = Path(__file__).parent / "static" / "debug.html"
+    if ui_path.exists():
+        return HTMLResponse(content=ui_path.read_text(encoding="utf-8"))
+    else:
+        return HTMLResponse(content="""
+        <html>
+        <head><title>Debug UI</title></head>
+        <body>
+            <h1>Debug UI not found</h1>
+            <p>Please ensure static/debug.html exists.</p>
+        </body>
+        </html>
+        """)
 
 
 # ============================================================================

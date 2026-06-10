@@ -192,6 +192,7 @@ class PDFChartParser:
     Usage:
         parser = PDFChartParser()
         patient_data = parser.parse_and_deidentify("chart.pdf")
+        debug_data = parser.get_debug_data()  # Access validation results
     """
     
     def __init__(self, use_llm: bool = True):
@@ -204,6 +205,39 @@ class PDFChartParser:
         if use_llm:
             self.bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
             self.model_id = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        
+        # Debug data storage - populated during extraction for verification
+        self._last_source_text = ""
+        self._last_faithfulness_result = {}
+        self._last_extraction_timestamp = None
+    
+    def get_debug_data(self) -> dict:
+        """
+        Get debug data from the last extraction for verification UI.
+        
+        Returns dict with:
+            - source_text: Full PDF text for searching
+            - faithfulness_score: 0-1 score
+            - conditions_validated: List of conditions found in source
+            - conditions_flagged: List of conditions NOT found in source
+            - medications_validated: List of medications found
+            - medications_flagged: List of medications NOT found
+            - lab_results_validated: List of lab results found in source
+            - lab_results_flagged: List of lab results NOT found (possible hallucination)
+            - extraction_timestamp: ISO timestamp
+        """
+        return {
+            "source_text": self._last_source_text,
+            "faithfulness_score": self._last_faithfulness_result.get("faithfulness_score", 0),
+            "conditions_validated": self._last_faithfulness_result.get("conditions_validated", []),
+            "conditions_flagged": self._last_faithfulness_result.get("conditions_flagged", []),
+            "medications_validated": self._last_faithfulness_result.get("medications_validated", []),
+            "medications_flagged": self._last_faithfulness_result.get("medications_flagged", []),
+            "lab_results_validated": self._last_faithfulness_result.get("lab_results_validated", []),
+            "lab_results_flagged": self._last_faithfulness_result.get("lab_results_flagged", []),
+            "extraction_timestamp": self._last_extraction_timestamp,
+            "details": self._last_faithfulness_result.get("details", []),
+        }
     
     def extract_text(self, pdf_path: str) -> str:
         """Extract all text from PDF."""
@@ -240,6 +274,8 @@ class PDFChartParser:
             "conditions_flagged": [],  # Not found in source - potential hallucination
             "medications_validated": [],
             "medications_flagged": [],
+            "lab_results_validated": [],
+            "lab_results_flagged": [],
             "faithfulness_score": 0.0,
             "details": []
         }
@@ -318,12 +354,69 @@ class PDFChartParser:
                 results["medications_flagged"].append(med)
                 results["details"].append(f"Medication not in source: {med_name}")
         
+        # Check lab results - flag if numeric values exist but aren't in source
+        # Must check that lab name AND value appear TOGETHER (within ~50 chars) to avoid
+        # false positives where "4.5" appears in medication dosage but not as a lab value
+        logger.info(f"Validating {len(extracted_data.get('lab_results', []))} lab results")
+        for lab in extracted_data.get("lab_results", []):
+            lab_name = lab.get("name", "").lower() if isinstance(lab, dict) else ""
+            lab_value = str(lab.get("value", "")) if isinstance(lab, dict) else ""
+            
+            logger.debug(f"Checking lab: name='{lab_name}', value='{lab_value}'")
+            
+            # Skip empty values
+            if not lab_value or lab_value.lower() in ["", "none", "n/a", "pending"]:
+                logger.debug(f"Skipping lab '{lab_name}' - empty or pending value")
+                continue
+            
+            # For numeric values, be STRICT - require name and value to appear together
+            # This prevents "4.5" in "take 4.5mg metformin" from validating a fabricated lab
+            is_numeric = lab_value.replace(".", "").replace("-", "").replace("<", "").replace(">", "").isdigit()
+            
+            if is_numeric and lab_name:
+                # Build pattern: lab name within ~100 chars of value (either order)
+                # Examples: "RBC: 4.5" or "4.5 (RBC)" or "RBC...4.5"
+                escaped_name = re.escape(lab_name)
+                escaped_value = re.escape(lab_value)
+                
+                # Check both orderings: name...value and value...name
+                pattern1 = rf'{escaped_name}.{{0,100}}{escaped_value}'
+                pattern2 = rf'{escaped_value}.{{0,100}}{escaped_name}'
+                
+                name_value_together = (
+                    re.search(pattern1, source_lower, re.IGNORECASE) or 
+                    re.search(pattern2, source_lower, re.IGNORECASE)
+                )
+                
+                if name_value_together:
+                    logger.info(f"Lab VALIDATED: {lab_name}={lab_value} (found together in source)")
+                    results["lab_results_validated"].append(lab)
+                else:
+                    logger.warning(f"Lab FLAGGED: {lab_name}={lab_value} (NOT found together in source)")
+                    results["lab_results_flagged"].append(lab)
+                    results["details"].append(f"Lab value not found with name in source: {lab_name}={lab_value} (possible hallucination)")
+            elif is_numeric:
+                # Numeric but no name - flag it (can't verify without name)
+                results["lab_results_flagged"].append(lab)
+                results["details"].append(f"Lab value without verifiable name: {lab_value}")
+            else:
+                # Non-numeric values (like "positive", "negative") - check both name and value in source
+                value_in_source = lab_value.lower() in source_lower
+                name_in_source = lab_name in source_lower if lab_name else False
+                
+                if name_in_source and value_in_source:
+                    results["lab_results_validated"].append(lab)
+                else:
+                    results["lab_results_flagged"].append(lab)
+                    results["details"].append(f"Lab result not verifiable in source: {lab_name}={lab_value}")
+        
         # Calculate overall faithfulness score
         total_conditions = len(extracted_data.get("conditions", []))
         total_meds = len(extracted_data.get("medications", []))
-        total_items = total_conditions + total_meds
+        total_labs = len(results["lab_results_validated"]) + len(results["lab_results_flagged"])
+        total_items = total_conditions + total_meds + total_labs
         
-        validated_items = len(results["conditions_validated"]) + len(results["medications_validated"])
+        validated_items = len(results["conditions_validated"]) + len(results["medications_validated"]) + len(results["lab_results_validated"])
         
         if total_items > 0:
             results["faithfulness_score"] = validated_items / total_items
@@ -346,22 +439,23 @@ class PDFChartParser:
     "admission_date": "first admission/observation date (MM/DD/YYYY)",
     "observation_date": "date patient was on observation status - usually first day (MM/DD/YYYY or null if not mentioned)",
     "inpatient_date": "date patient transitioned to inpatient status - usually day after observation (MM/DD/YYYY or null if not mentioned)",
-    "place_of_service": "Look for 'ED Provider Notes', 'Service: Emergency Medicine', 'EMERGENCY DEPARTMENT ENCOUNTER' → use 'emergency department'. Otherwise use 'hospital' for inpatient, 'urgent care', or 'clinic' based on chart",
-    "chief_complaint": "VERBATIM extraction from CHIEF COMPLAINT and HPI sections. Use PAST TENSE. Start with symptom list from chart (e.g. 'flank pain and hematuria'), then add ONLY facts stated in HPI (timeline, severity, associated symptoms). Do NOT add interpretive language or conclusions not in source. Do NOT end with 'hospital admission was medically necessary' unless that exact phrase appears in chart.",
-    "hpi": "history of present illness summary - VERBATIM from chart (1-2 sentences)",
+    "place_of_service": "Check ADMISSION STATUS first: if 'Inpatient', admitted to a unit (neuro-tele, ICU, med-surg), or 'INPATIENT H&P' → use 'hospital'. Only use 'emergency department' if ENTIRE encounter was ED-only with no admission. Otherwise 'urgent care' or 'clinic'.",
+    "chief_complaint": "Full narrative: Extract from CHIEF COMPLAINT and HPI sections. Include presenting symptoms, timeline, severity, and associated symptoms. Use PAST TENSE. Do NOT add diagnoses or clinical findings not explicitly stated. Example: 'altered mental status and generalized weakness with progressive decline over 3 days'",
+    "chief_complaint_short": "Brief symptom list only: 'chest pain, shortness of breath'",
+    "hpi": "history of present illness summary - VERBATIM from chart (2-4 sentences with timeline and key details)",
     "conditions": ["CHRONIC DISEASES ONLY from PAST MEDICAL HISTORY section. Extract EXACTLY as written. Do NOT include acute symptoms."],
     "medications": [
         {{"name": "drug name", "dose": "dose", "route": "PO/IV/etc", "frequency": "frequency"}}
     ],
     "lab_results": [
-        {{"name": "test name", "value": "result from LAB TABLE ONLY", "unit": "unit", "flag": "ONLY 'H' or 'L' if EXPLICITLY marked in chart, otherwise leave BLANK"}}
+        {{"name": "test name", "value": "EXACT value from LAB TABLE ONLY - do NOT use values from narrative text", "unit": "unit", "flag": "ONLY 'H' or 'L' if EXPLICITLY marked in chart, otherwise leave BLANK"}}
     ],
     "vitals": {{
-        "bp": "120/80",
-        "hr": "80",
-        "temp": "98.6",
-        "rr": "16",
-        "spo2": "98"
+        "bp": "ONLY if documented (e.g. '120/80') - leave empty string if not in chart",
+        "hr": "ONLY if documented - leave empty string if not in chart",
+        "temp": "ONLY if documented - leave empty string if not in chart",
+        "rr": "ONLY if documented - leave empty string if not in chart",
+        "spo2": "ONLY if documented - leave empty string if not in chart"
     }},
     "insurance_name": "primary insurance/payer name (look for INSURANCE 1, UHC, Humana, Aetna, etc.)",
     "insurance_id": "INSURED ID number (look for INSURED ID:, Member ID, Subscriber ID - e.g. 931969345)",
@@ -375,18 +469,16 @@ class PDFChartParser:
 }}
 
 CRITICAL INSTRUCTIONS:
-- VERBATIM EXTRACTION: Copy text exactly as written. Do NOT paraphrase, summarize, or add interpretive content.
-- LAB VALUES: Extract ONLY from structured lab tables. If a value appears in narrative text differently, note discrepancy but use table value.
+- VITALS: Only include vitals that are EXPLICITLY documented with values. If chart only shows HR and SpO2, leave BP, temp, RR as empty strings. DO NOT fabricate "normal" values.
+- LAB VALUES: Extract ONLY from structured LAB TABLES with columns. Narrative text like "CBC showing anemia 7 down from 9.8" means hemoglobin is 7, NOT a different number. Use the EXACT numeric values shown.
 - LAB FLAGS: Only mark 'H' or 'L' if explicitly shown next to value. Do NOT infer flags - leave blank if not marked.
 - CONDITIONS: Extract ONLY from PAST MEDICAL HISTORY section, not from narrative or assessment.
+- PLACE OF SERVICE: If patient was ADMITTED to a hospital unit (ICU, neuro-tele, med-surg, etc.), use "hospital" NOT "emergency department". Only use "emergency department" if the entire encounter was ED-only without admission.
+- CHIEF COMPLAINT: Keep brief (1-2 sentences). Do NOT include full HPI narrative. Example: "generalized weakness and altered mental status"
 - ONLY include information explicitly stated in the chart - do NOT infer or make up findings
 - Do NOT add clinical findings like tachycardia, fever, hypotension unless explicitly documented with values
 - Extract conditions EXACTLY as written in PAST MEDICAL HISTORY
 - Extract all medications with their doses exactly as listed
-- Lab flags: ONLY use H/L if explicitly marked, otherwise leave flag field empty string
-- chief_complaint: Extract VERBATIM from chart, do not add interpretive narrative
-- Look for INSURANCE 1 or Insurance section for payer information
-- For place_of_service: Look for 'ED Provider Notes', 'Service: Emergency Medicine', 'EMERGENCY DEPARTMENT' → 'emergency department'
 
 CHART TEXT:
 {text[:30000]}
@@ -418,6 +510,11 @@ Return ONLY valid JSON, no other text."""
         
         # Validate faithfulness - check if extracted terms appear in source
         faithfulness_result = self._validate_extraction_faithfulness(data, text)
+        
+        # Store debug data for verification UI
+        self._last_source_text = text
+        self._last_faithfulness_result = faithfulness_result
+        self._last_extraction_timestamp = datetime.now().isoformat()
         
         # Log to Langfuse with full audit trail
         langfuse_trace = None

@@ -53,4 +53,5 @@ LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
 LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
 # Accept both LANGFUSE_HOST and LANGFUSE_BASE_URL (used by AI Portal)
 LANGFUSE_HOST = os.getenv("LANGFUSE_HOST") or os.getenv("LANGFUSE_BASE_URL") or "https://cloud.langfuse.com"
+LANGFUSE_PROJECT_ID = os.getenv("LANGFUSE_PROJECT_ID", "cmpyima37000zpd07vdrkhp9f")  # Project ID for trace URLs
 LANGFUSE_ENABLED = bool(LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY)

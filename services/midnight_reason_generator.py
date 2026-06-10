@@ -322,6 +322,107 @@ class MidnightReasonGenerator:
         # Only initialize Epic fetcher if needed (not for PDF-based flow)
         self._epic_fetcher = None
         self._skip_epic = skip_epic
+        
+        # Debug data capture
+        self._last_input_conditions = []
+        self._last_input_medications = []
+        self._last_generated_text = ""
+        self._last_generation_timestamp = None
+        self._last_validation_result = {}
+    
+    def get_debug_data(self) -> dict:
+        """
+        Get debug data from the last generation for verification UI.
+        
+        Returns dict with:
+            - input_conditions: Conditions provided to the LLM
+            - input_medications: Medications provided to the LLM
+            - generated_text: Full generated midnight reason text
+            - conditions_used: Conditions mentioned in output that were in input
+            - conditions_hallucinated: Conditions mentioned in output NOT in input
+            - generation_timestamp: ISO timestamp
+        """
+        return {
+            "input_conditions": self._last_input_conditions,
+            "input_medications": self._last_input_medications,
+            "generated_text": self._last_generated_text,
+            "conditions_used": self._last_validation_result.get("conditions_used", []),
+            "conditions_hallucinated": self._last_validation_result.get("conditions_hallucinated", []),
+            "generation_timestamp": self._last_generation_timestamp,
+            "source": "midnight-reason-generator"
+        }
+    
+    def _validate_generation(self, generated_text: str, input_conditions: List[str], input_medications: List[str]) -> dict:
+        """
+        Validate that generated text only uses conditions/medications from input.
+        
+        Returns dict with conditions_used and conditions_hallucinated lists.
+        """
+        import re
+        
+        generated_lower = generated_text.lower()
+        
+        # Common condition terms to check for in generated text
+        # These are medical terms that if mentioned should be in the input
+        common_conditions = [
+            "diabetes", "diabetic", "hypertension", "htn", "heart failure", "chf", "hfpef", "hfref",
+            "copd", "asthma", "pneumonia", "uti", "urinary tract infection", "sepsis", "aki",
+            "acute kidney injury", "ckd", "chronic kidney disease", "anemia", "afib", "atrial fibrillation",
+            "cad", "coronary artery disease", "stroke", "cva", "tia", "dvt", "pe", "pulmonary embolism",
+            "gerd", "cirrhosis", "hepatitis", "pancreatitis", "cholecystitis", "diverticulitis",
+            "cellulitis", "osteomyelitis", "endocarditis", "meningitis", "encephalopathy",
+            "hyperlipidemia", "hld", "obesity", "hypothyroidism", "hyperthyroidism",
+            "fibromyalgia", "lupus", "rheumatoid arthritis", "osteoarthritis", "gout",
+            "depression", "anxiety", "dementia", "alzheimer", "parkinson", "multiple sclerosis",
+            "epilepsy", "seizure", "cancer", "malignancy", "leukemia", "lymphoma"
+        ]
+        
+        # Build set of normalized input conditions
+        input_conditions_lower = set()
+        for cond in input_conditions:
+            cond_lower = cond.lower()
+            input_conditions_lower.add(cond_lower)
+            # Add abbreviations/variations
+            if "hypertension" in cond_lower:
+                input_conditions_lower.add("htn")
+            if "heart failure" in cond_lower or "chf" in cond_lower:
+                input_conditions_lower.add("chf")
+                input_conditions_lower.add("heart failure")
+                input_conditions_lower.add("hfpef")
+                input_conditions_lower.add("hfref")
+            if "diabetes" in cond_lower:
+                input_conditions_lower.add("dm")
+                input_conditions_lower.add("diabetic")
+            if "atrial fibrillation" in cond_lower:
+                input_conditions_lower.add("afib")
+            if "chronic kidney" in cond_lower:
+                input_conditions_lower.add("ckd")
+            if "coronary artery" in cond_lower:
+                input_conditions_lower.add("cad")
+            if "copd" in cond_lower or "chronic obstructive" in cond_lower:
+                input_conditions_lower.add("copd")
+        
+        conditions_used = []
+        conditions_hallucinated = []
+        
+        for term in common_conditions:
+            if term in generated_lower:
+                # Check if this term or its variants are in input
+                found_in_input = False
+                for input_cond in input_conditions_lower:
+                    if term in input_cond or input_cond in term:
+                        found_in_input = True
+                        break
+                
+                if found_in_input:
+                    conditions_used.append(term)
+                else:
+                    conditions_hallucinated.append(term)
+        
+        return {
+            "conditions_used": list(set(conditions_used)),
+            "conditions_hallucinated": list(set(conditions_hallucinated))
+        }
     
     @property
     def epic_fetcher(self):
@@ -543,6 +644,16 @@ CRITICAL FORMATTING RULES:
 - midnight_reason_1 must start with "management of [condition] requiring..." (NOT "The first midnight..." or "due to...")
 - midnight_reason_2 must start with treatment/service list like "IV [medication], continued..." (NOT "The second midnight..." or "due to...")
 
+FAITHFULNESS - YOU MAY ONLY USE:
+- Conditions from the CONDITIONS list above - do NOT invent or infer additional diagnoses
+- Medications from the MEDICATIONS list above
+- Lab values from the LAB RESULTS list above
+- If a condition is not in the list, do NOT mention it even if it seems clinically related
+
+REQUIRED LANGUAGE:
+- Include "medically necessary" somewhere in midnight_reason_1
+- Include "inpatient level of care" or similar somewhere in the output
+
 These will be inserted after "The first/second midnight was medically necessary for" so they must flow grammatically.
 
 If specific data is not available (like medications or imaging), use clinically reasonable language to indicate what would typically be required for the documented conditions.
@@ -631,6 +742,19 @@ CRITICAL FORMATTING:
 - Reference specific pathogens from cultures when available
 - Explain clinical reasoning for treatment decisions
 
+FAITHFULNESS - CRITICAL:
+- ONLY use conditions that appear in the provided CONDITIONS list - do NOT add or infer conditions
+- If "fibromyalgia" is not in the conditions list, do NOT mention fibromyalgia
+- If "diabetes" is not in the conditions list, do NOT mention diabetes
+- Copy condition names EXACTLY as they appear in the input
+- You may use standard abbreviations (HTN for hypertension, CHF for heart failure, etc.)
+- Lab values, medications, and other clinical data must come from the provided data
+
+MEDICAL NECESSITY LANGUAGE - REQUIRED:
+- MUST include the phrase "medically necessary" or "medical necessity" at least once in midnight_reason_1
+- Include language like: "This level of care was medically necessary because..." or "inpatient admission was medically necessary for..."
+- Include: "could not be safely performed in a lower level of care" or "required inpatient level of care"
+
 TONE - AVOID SENSATIONALIZED LANGUAGE:
 - Do NOT use dramatic phrases like: "life-threatening", "extreme", "critical", "urgent emergent", "highly unstable", "severe, life-threatening", "extreme hemodynamic stress"
 - Do NOT stack multiple dramatic adjectives ("complex, highly unstable interplay")
@@ -656,6 +780,16 @@ Generate the patient background paragraph, MidnightReason1, and MidnightReason2 
 CRITICAL FORMATTING RULES:
 - midnight_reason_1 must start with "management of [condition] requiring..." (NOT "The first midnight..." or "due to...")
 - midnight_reason_2 must start with treatment/service list like "IV [medication], continued..." (NOT "The second midnight..." or "due to...")
+
+FAITHFULNESS - YOU MAY ONLY USE:
+- Conditions from the CONDITIONS list above - do NOT invent or infer additional diagnoses
+- Medications from the MEDICATIONS list above
+- Lab values from the LAB RESULTS list above
+- If a condition is not in the list, do NOT mention it even if it seems clinically related
+
+REQUIRED LANGUAGE:
+- Include "medically necessary" somewhere in midnight_reason_1
+- Include "inpatient level of care" or similar somewhere in the output
 
 These will be inserted after "The first/second midnight was medically necessary for" so they must flow grammatically.
 
@@ -698,6 +832,18 @@ Follow the format and style of formal Medicare appeal letters."""
         
         # Fix a/an grammar in patient background
         patient_bg = fix_a_an_grammar(result.get("patient_background", ""))
+        
+        # Capture debug data for verification UI
+        generated_text = f"{patient_bg}\n\nMidnightReason1: {result.get('midnight_reason_1', '')}\n\nMidnightReason2: {result.get('midnight_reason_2', '')}"
+        self._last_input_conditions = patient_data.conditions
+        self._last_input_medications = [m.get("name", "") for m in patient_data.medications]
+        self._last_generated_text = generated_text
+        self._last_generation_timestamp = datetime.now().isoformat()
+        self._last_validation_result = self._validate_generation(
+            generated_text, 
+            patient_data.conditions,
+            self._last_input_medications
+        )
         
         return MidnightReasonOutput(
             patient_background=patient_bg,

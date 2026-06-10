@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Medicare Appeal Letter Generator</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%232563eb'%3E%3Cpath d='M11.25 4.533A9.707 9.707 0 006 3a9.735 9.735 0 00-3.25.555.75.75 0 00-.5.707v14.25a.75.75 0 001 .707A8.237 8.237 0 016 18.75c1.995 0 3.823.707 5.25 1.886V4.533zM12.75 20.636A8.214 8.214 0 0118 18.75c.966 0 1.89.166 2.75.47a.75.75 0 001-.708V4.262a.75.75 0 00-.5-.707A9.735 9.735 0 0018 3a9.707 9.707 0 00-5.25 1.533v16.103z'/%3E%3C/svg%3E">
+    <!-- PDF.js for rendering PDF preview -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
         :root {
             --primary-color: #2563eb;
@@ -35,14 +37,14 @@
         .container {
             max-width: 1800px;
             margin: 0 auto;
-            padding: 1.5rem;
+            padding: 1rem;
         }
         
         header {
             background: linear-gradient(135deg, var(--primary-color), #4f46e5);
             color: white;
-            padding: 1.5rem 2rem;
-            margin-bottom: 1.5rem;
+            padding: 1rem 1.5rem;
+            margin-bottom: 1rem;
             border-radius: 12px;
             box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
             display: flex;
@@ -86,7 +88,7 @@
             display: flex;
             justify-content: center;
             gap: 2rem;
-            margin-bottom: 1.5rem;
+            margin-bottom: 0.75rem;
         }
         
         .step {
@@ -132,15 +134,15 @@
             background: var(--card-bg);
             border-radius: 12px;
             box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
-            padding: 1.25rem;
-            margin-bottom: 1rem;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
         }
         
         .card h2 {
             font-size: 1rem;
             font-weight: 600;
-            margin-bottom: 0.75rem;
-            padding-bottom: 0.5rem;
+            margin-bottom: 0.5rem;
+            padding-bottom: 0.4rem;
             border-bottom: 1px solid var(--border-color);
         }
         
@@ -148,7 +150,7 @@
         .upload-zone {
             border: 2px dashed var(--border-color);
             border-radius: 12px;
-            padding: 2.5rem;
+            padding: 1.5rem;
             text-align: center;
             cursor: pointer;
             transition: all 0.2s;
@@ -159,6 +161,15 @@
             background: rgba(37, 99, 235, 0.05);
         }
         
+        .upload-zone.has-preview {
+            padding: 0.75rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+            text-align: center;
+        }
+        
         .upload-zone svg {
             width: 40px;
             height: 40px;
@@ -166,8 +177,118 @@
             margin-bottom: 0.75rem;
         }
         
+        .upload-zone.has-preview svg {
+            display: none;
+        }
+        
         .upload-zone p {
             color: var(--text-secondary);
+        }
+        
+        /* PDF Preview */
+        .pdf-preview-container {
+            display: none;
+            flex-shrink: 0;
+        }
+        
+        .upload-zone.has-preview .pdf-preview-container {
+            display: block;
+        }
+        
+        .upload-zone.has-preview .upload-prompt {
+            display: none;
+        }
+        
+        .pdf-preview {
+            width: 100%;
+            max-width: 500px;
+            height: 350px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            overflow: auto;
+            background: #525659;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            position: relative;
+        }
+        
+        .pdf-preview canvas {
+            display: block;
+            margin: 0 auto;
+        }
+        
+        .pdf-preview-loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--text-secondary);
+            font-size: 0.75rem;
+        }
+        
+        .pdf-file-info {
+            text-align: center;
+        }
+        
+        .pdf-file-info h3 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 0.25rem;
+            word-break: break-word;
+        }
+        
+        .pdf-file-info p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin: 0;
+        }
+        
+        .pdf-file-info .change-file {
+            display: inline-block;
+            margin-top: 0.5rem;
+            color: var(--primary-color);
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+        }
+        
+        .pdf-file-info .change-file:hover {
+            text-decoration: underline;
+        }
+        
+        /* Remove button for PDF preview */
+        .pdf-remove-btn {
+            position: absolute;
+            top: -8px;
+            right: -8px;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: var(--error-color);
+            color: white;
+            border: 2px solid white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            transition: transform 0.15s, background 0.15s;
+            z-index: 10;
+        }
+        
+        .pdf-remove-btn:hover {
+            background: #b91c1c;
+            transform: scale(1.1);
+        }
+        
+        .pdf-preview-container {
+            position: relative;
+        }
+        
+        .pdf-file-info .change-file:hover {
+            text-decoration: underline;
             margin-bottom: 0.25rem;
         }
         
@@ -176,10 +297,10 @@
         }
         
         .hospital-input {
-            margin-top: 1rem;
+            margin-top: 0.5rem;
             display: flex;
             align-items: center;
-            gap: 1rem;
+            gap: 0.75rem;
         }
         
         .hospital-input label {
@@ -608,33 +729,48 @@
                 <h2>Upload Clinical Chart PDF</h2>
                 
                 <div class="upload-zone" id="drop-zone">
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                    </svg>
-                    <p><strong>Drag & drop your PDF here</strong></p>
-                    <p>or click to browse</p>
+                    <!-- Default upload prompt -->
+                    <div class="upload-prompt">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                        </svg>
+                        <p><strong>Drag & drop your PDF here</strong></p>
+                        <p>or click to browse</p>
+                    </div>
+                    
+                    <!-- PDF Preview (shown after file selected) -->
+                    <div class="pdf-preview-container">
+                        <button type="button" class="pdf-remove-btn" id="pdf-remove-btn" title="Remove file">✕</button>
+                        <div class="pdf-preview">
+                            <canvas id="pdf-canvas"></canvas>
+                            <div class="pdf-preview-loading" id="pdf-loading">Loading...</div>
+                        </div>
+                    </div>
+                    <div class="pdf-file-info" style="display: none;">
+                        <h3 id="preview-file-name">filename.pdf</h3>
+                        <p id="preview-file-size">0 KB</p>
+                        <span class="change-file">Click to change file</span>
+                    </div>
+                    
                     <input type="file" id="file-input" accept=".pdf">
-                </div>
-                
-                <div id="selected-file" style="margin-top: 1rem; display: none;">
-                    <strong>Selected:</strong> <span id="file-name"></span>
                 </div>
                 
                 <div class="hospital-input">
                     <label for="ministry">Ministry:</label>
                     <select id="ministry" style="flex: 1; padding: 0.5rem 0.75rem; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.9rem;">
                         <option value="">-- Select Ministry --</option>
-                        <option value="ssm_stmarys">SSM Health St. Mary's Hospital - Madison</option>
-                        <option value="ssm_stclare">SSM Health St. Clare Hospital - Baraboo</option>
-                        <option value="ssm_stagnes">SSM Health St. Agnes Hospital - Fond du Lac</option>
-                        <option value="ssm_dean">SSM Health Dean Medical Group</option>
-                        <option value="ssm_stlouis">SSM Health St. Louis University Hospital</option>
                         <option value="ssm_cardinal">SSM Health Cardinal Glennon Children's Hospital</option>
+                        <option value="ssm_dean">SSM Health Dean Medical Group</option>
                         <option value="ssm_depaul">SSM Health DePaul Hospital - St. Louis</option>
+                        <option value="ssm_oklahoma">SSM Health Oklahoma</option>
+                        <option value="ssm_stagnes">SSM Health St. Agnes Hospital - Fond du Lac</option>
+                        <option value="ssm_stclare">SSM Health St. Clare Hospital - Baraboo</option>
+                        <option value="ssm_joseph_lakestlouis">SSM Health St. Joseph Hospital - Lake St. Louis</option>
                         <option value="ssm_joseph_stcharles">SSM Health St. Joseph Hospital - St. Charles</option>
                         <option value="ssm_joseph_wentzville">SSM Health St. Joseph Hospital - Wentzville</option>
-                        <option value="ssm_joseph_lakestlouis">SSM Health St. Joseph Hospital - Lake St. Louis</option>
-                        <option value="ssm_oklahoma">SSM Health Oklahoma</option>
+                        <option value="ssm_stlouis">SSM Health St. Louis University Hospital</option>
+                        <option value="ssm_stmarys">SSM Health St. Mary's Hospital - Madison</option>
+                        <option value="ssm_stmarys_stlouis">SSM Health St. Mary's Hospital - St. Louis</option>
                     </select>
                 </div>
                 
@@ -779,6 +915,12 @@
                             <button type="button" class="btn btn-outline" id="back-btn">
                                 Back to Upload
                             </button>
+                            <a id="debug-link" href="#" target="_blank" class="btn" style="background: #7c3aed; color: white; text-decoration: none;">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                </svg>
+                                Debug Extraction
+                            </a>
                             <button type="submit" class="btn btn-success" id="generate-btn">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -836,6 +978,9 @@
     </div>
     
     <script>
+        // Initialize PDF.js worker
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        
         // State
         let currentSessionId = null;
         let selectedFile = null;
@@ -844,8 +989,6 @@
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
         const uploadBtn = document.getElementById('upload-btn');
-        const selectedFileDiv = document.getElementById('selected-file');
-        const fileNameSpan = document.getElementById('file-name');
         const ministrySelect = document.getElementById('ministry');
         const uploadLoading = document.getElementById('upload-loading');
         const generateLoading = document.getElementById('generate-loading');
@@ -854,6 +997,14 @@
         const backBtn = document.getElementById('back-btn');
         const newAppealBtn = document.getElementById('new-appeal-btn');
         const letterPreview = document.getElementById('letter-preview');
+        
+        // PDF preview elements
+        const pdfCanvas = document.getElementById('pdf-canvas');
+        const pdfLoading = document.getElementById('pdf-loading');
+        const pdfFileInfo = document.querySelector('.pdf-file-info');
+        const previewFileName = document.getElementById('preview-file-name');
+        const previewFileSize = document.getElementById('preview-file-size');
+        const pdfRemoveBtn = document.getElementById('pdf-remove-btn');
         
         // Step elements
         const stepUpload = document.getElementById('step-upload');
@@ -1048,6 +1199,9 @@
             document.getElementById('zip_code').value = data.zip_code || '';
             document.getElementById('midnight_reason_1').value = data.midnight_reason_1 || '';
             document.getElementById('midnight_reason_2').value = data.midnight_reason_2 || '';
+            
+            // Update debug link with session ID
+            document.getElementById('debug-link').href = `appeal/debug?session=${data.session_id}`;
         }
         
         // Event handlers for live preview
@@ -1095,12 +1249,77 @@
             uploadBtn.disabled = !(hasFile && hasMinistry);
         }
         
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' bytes';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+        
+        async function renderPdfPreview(file) {
+            pdfLoading.style.display = 'block';
+            pdfCanvas.style.display = 'none';
+            
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                const page = await pdf.getPage(1);
+                
+                // Render at 1.5x scale for readability (scrollable container)
+                const scale = 1.5;
+                const viewport = page.getViewport({ scale });
+                
+                pdfCanvas.width = viewport.width;
+                pdfCanvas.height = viewport.height;
+                
+                const ctx = pdfCanvas.getContext('2d');
+                await page.render({
+                    canvasContext: ctx,
+                    viewport: viewport
+                }).promise;
+                
+                pdfLoading.style.display = 'none';
+                pdfCanvas.style.display = 'block';
+            } catch (err) {
+                console.error('PDF preview error:', err);
+                pdfLoading.textContent = 'Preview unavailable';
+            }
+        }
+        
         function handleFileSelect(file) {
             selectedFile = file;
-            fileNameSpan.textContent = file.name;
-            selectedFileDiv.style.display = 'block';
+            
+            // Update preview display
+            previewFileName.textContent = file.name;
+            previewFileSize.textContent = formatFileSize(file.size);
+            
+            // Show preview mode
+            dropZone.classList.add('has-preview');
+            pdfFileInfo.style.display = 'block';
+            
+            // Render PDF thumbnail
+            renderPdfPreview(file);
+            
             checkUploadReady();
         }
+        
+        function resetPdfPreview() {
+            dropZone.classList.remove('has-preview');
+            pdfFileInfo.style.display = 'none';
+            pdfCanvas.style.display = 'none';
+            pdfLoading.style.display = 'block';
+            pdfLoading.textContent = 'Loading...';
+        }
+        
+        function clearFileSelection(e) {
+            if (e) e.stopPropagation(); // Prevent triggering file picker
+            selectedFile = null;
+            fileInput.value = '';
+            resetPdfPreview();
+            checkUploadReady();
+        }
+        
+        // Remove button handler
+        pdfRemoveBtn.addEventListener('click', clearFileSelection);
         
         // Ministry selection handler
         ministrySelect.addEventListener('change', checkUploadReady);
@@ -1159,7 +1378,7 @@
             setStep(1);
             fileInput.value = '';
             selectedFile = null;
-            selectedFileDiv.style.display = 'none';
+            resetPdfPreview();
             uploadBtn.disabled = true;
             ministrySelect.selectedIndex = 0;  // Reset ministry dropdown
             appealForm.reset();
@@ -1230,7 +1449,7 @@
             currentSessionId = null;
             fileInput.value = '';
             selectedFile = null;
-            selectedFileDiv.style.display = 'none';
+            resetPdfPreview();
             uploadBtn.disabled = true;
             ministrySelect.selectedIndex = 0;  // Reset ministry dropdown
             appealForm.reset();
