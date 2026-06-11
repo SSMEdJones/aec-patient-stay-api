@@ -425,6 +425,97 @@ class PDFChartParser:
         
         return results
     
+    def _build_langfuse_excerpts(self, extracted_data: dict, source_text: str, max_chars: int = 25000) -> dict:
+        """
+        Build smart excerpts for Langfuse LLM-as-a-Judge.
+        
+        Instead of sending the first N chars (which misses labs at end of doc),
+        we extract context around each extracted value so the judge can verify.
+        
+        Returns:
+            dict with prioritized excerpts that fit within max_chars
+        """
+        source_lower = source_text.lower()
+        excerpts = {
+            "patient_demographics": "",
+            "conditions_evidence": [],
+            "medications_evidence": [],
+            "lab_values_evidence": [],
+            "summary": ""
+        }
+        
+        used_chars = 0
+        context_window = 150  # chars before/after each found term
+        
+        # 1. Patient demographics (first 1000 chars typically has name, DOB, MRN)
+        excerpts["patient_demographics"] = source_text[:1000]
+        used_chars += 1000
+        
+        # 2. Find evidence for each extracted condition
+        for condition in extracted_data.get("conditions", [])[:15]:  # Top 15 conditions
+            if used_chars >= max_chars:
+                break
+            cond_lower = condition.lower() if isinstance(condition, str) else ""
+            if not cond_lower:
+                continue
+            idx = source_lower.find(cond_lower)
+            if idx >= 0:
+                start = max(0, idx - context_window)
+                end = min(len(source_text), idx + len(cond_lower) + context_window)
+                excerpt = source_text[start:end].strip()
+                if excerpt not in excerpts["conditions_evidence"]:
+                    excerpts["conditions_evidence"].append(f"...{excerpt}...")
+                    used_chars += len(excerpt) + 10
+        
+        # 3. Find evidence for each medication
+        for med in extracted_data.get("medications", [])[:12]:  # Top 12 meds
+            if used_chars >= max_chars:
+                break
+            med_name = med.get("name", "").lower() if isinstance(med, dict) else ""
+            if not med_name or len(med_name) < 3:
+                continue
+            idx = source_lower.find(med_name)
+            if idx >= 0:
+                start = max(0, idx - context_window)
+                end = min(len(source_text), idx + len(med_name) + context_window)
+                excerpt = source_text[start:end].strip()
+                if excerpt not in excerpts["medications_evidence"]:
+                    excerpts["medications_evidence"].append(f"...{excerpt}...")
+                    used_chars += len(excerpt) + 10
+        
+        # 4. Find evidence for each lab value (CRITICAL - this is what Langfuse was missing)
+        for lab in extracted_data.get("lab_results", [])[:20]:  # Top 20 labs
+            if used_chars >= max_chars:
+                break
+            lab_name = lab.get("name", "").lower() if isinstance(lab, dict) else ""
+            lab_value = str(lab.get("value", "")) if isinstance(lab, dict) else ""
+            
+            if not lab_name or len(lab_name) < 2:
+                continue
+            
+            # Search for lab name + value together
+            idx = source_lower.find(lab_name)
+            if idx >= 0:
+                start = max(0, idx - 50)
+                end = min(len(source_text), idx + len(lab_name) + 200)  # Wider window for lab values
+                excerpt = source_text[start:end].strip()
+                
+                # Only include if we find the value nearby
+                if lab_value and lab_value in excerpt:
+                    if excerpt not in excerpts["lab_values_evidence"]:
+                        excerpts["lab_values_evidence"].append(f"...{excerpt}...")
+                        used_chars += len(excerpt) + 10
+        
+        # 5. Build summary
+        excerpts["summary"] = (
+            f"Document: {len(source_text)} chars. "
+            f"Found evidence for: {len(excerpts['conditions_evidence'])} conditions, "
+            f"{len(excerpts['medications_evidence'])} medications, "
+            f"{len(excerpts['lab_values_evidence'])} lab values."
+        )
+        
+        return excerpts
+    
     def _extract_with_llm(self, text: str) -> ExtractedChartData:
         """Use Claude to extract structured data from clinical text."""
         prompt = f"""Extract clinical data from this patient chart. Return JSON with these fields:
@@ -439,7 +530,7 @@ class PDFChartParser:
     "admission_date": "first admission/observation date (MM/DD/YYYY)",
     "observation_date": "date patient was on observation status - usually first day (MM/DD/YYYY or null if not mentioned)",
     "inpatient_date": "date patient transitioned to inpatient status - usually day after observation (MM/DD/YYYY or null if not mentioned)",
-    "place_of_service": "Check ADMISSION STATUS first: if 'Inpatient', admitted to a unit (neuro-tele, ICU, med-surg), or 'INPATIENT H&P' → use 'hospital'. Only use 'emergency department' if ENTIRE encounter was ED-only with no admission. Otherwise 'urgent care' or 'clinic'.",
+    "place_of_service": "Determine initial point of care: If 'presents via EMS', 'arrived by ambulance', 'brought to ED', or 'emergency department' → use 'Emergency Department'. If direct admission to floor/unit without ED → use 'Hospital'. If outpatient → 'Urgent Care' or 'Clinic'.",
     "chief_complaint": "Full narrative: Extract from CHIEF COMPLAINT and HPI sections. Include presenting symptoms, timeline, severity, and associated symptoms. Use PAST TENSE. Do NOT add diagnoses or clinical findings not explicitly stated. Example: 'altered mental status and generalized weakness with progressive decline over 3 days'",
     "chief_complaint_short": "Brief symptom list only: 'chest pain, shortness of breath'",
     "hpi": "history of present illness summary - VERBATIM from chart (2-4 sentences with timeline and key details)",
@@ -520,47 +611,20 @@ Return ONLY valid JSON, no other text."""
         langfuse_trace = None
         if langfuse_client:
             try:
-                # Extract key source excerpts for verification (searchable in Langfuse)
-                source_excerpts = {
-                    "patient_info": text[:800],  # First 800 chars usually have demographics
-                    "conditions_section": "",
-                    "insurance_section": "",
-                    "medications_section": "",
-                    "labs_section": "",
-                    "assessment_section": "",
-                }
-                
-                # Find past medical history / conditions section
-                pmh_match = re.search(r'(PAST MEDICAL HISTORY|MEDICAL HISTORY|PMH|CONDITIONS).{0,800}', text, re.IGNORECASE | re.DOTALL)
-                if pmh_match:
-                    source_excerpts["conditions_section"] = pmh_match.group()
-                
-                # Find insurance section
-                ins_match = re.search(r'INSURANCE.{0,500}', text, re.IGNORECASE | re.DOTALL)
-                if ins_match:
-                    source_excerpts["insurance_section"] = ins_match.group()
-                
-                # Find medications section
-                med_match = re.search(r'(HOME MEDICATIONS|MEDICATIONS|CURRENT MEDS).{0,800}', text, re.IGNORECASE | re.DOTALL)
-                if med_match:
-                    source_excerpts["medications_section"] = med_match.group()
-                
-                # Find labs section  
-                lab_match = re.search(r'(LABORATORY|LAB RESULTS|LABS).{0,600}', text, re.IGNORECASE | re.DOTALL)
-                if lab_match:
-                    source_excerpts["labs_section"] = lab_match.group()
-                
-                # Find assessment/plan section
-                assess_match = re.search(r'(ASSESSMENT|PLAN|A/P).{0,600}', text, re.IGNORECASE | re.DOTALL)
-                if assess_match:
-                    source_excerpts["assessment_section"] = assess_match.group()
+                # Build smart excerpts that include evidence for extracted values
+                # This ensures Langfuse LLM-as-a-Judge can verify labs that appear late in doc
+                smart_excerpts = self._build_langfuse_excerpts(data, text, max_chars=25000)
                 
                 langfuse_trace = langfuse_client.trace(
                     name="pdf-chart-extraction",
                     input={
                         "pdf_length_chars": len(text),
-                        "source_excerpts": source_excerpts,  # Key sections for audit
-                        "full_source_text": text[:15000],  # First 15K chars for full audit trail
+                        "source_evidence": smart_excerpts,  # Focused excerpts around extracted values
+                        "extracted_data_preview": {
+                            "conditions": data.get("conditions", [])[:10],
+                            "medications": [m.get("name") for m in data.get("medications", [])[:8]],
+                            "lab_results": [f"{l.get('name')}={l.get('value')}" for l in data.get("lab_results", [])[:15]],
+                        }
                     },
                     output={
                         "extracted_data": data,
@@ -570,6 +634,8 @@ Return ONLY valid JSON, no other text."""
                             "conditions_flagged": faithfulness_result["conditions_flagged"],
                             "medications_validated": len(faithfulness_result["medications_validated"]),
                             "medications_flagged": [m.get("name", str(m)) for m in faithfulness_result["medications_flagged"]],
+                            "lab_results_validated": len(faithfulness_result.get("lab_results_validated", [])),
+                            "lab_results_flagged": [f"{l.get('name')}={l.get('value')}" for l in faithfulness_result.get("lab_results_flagged", [])],
                         }
                     },
                     metadata={"model": self.model_id}
@@ -577,7 +643,7 @@ Return ONLY valid JSON, no other text."""
                 langfuse_trace.generation(
                     name="extract-clinical-data",
                     model=self.model_id,
-                    input=prompt,  # Full prompt for audit
+                    input=prompt[:8000],  # Truncate prompt for Langfuse
                     output=result_text,
                     usage={
                         "input": usage.get("inputTokens", 0),
@@ -649,7 +715,7 @@ Return ONLY valid JSON, no other text."""
             admission_date=data.get("admission_date", ""),
             observation_date=data.get("observation_date", ""),
             inpatient_date=data.get("inpatient_date", ""),
-            place_of_service=data.get("place_of_service", "emergency department"),
+            place_of_service=data.get("place_of_service", "Emergency Department"),
             chief_complaint_short=data.get("chief_complaint_short", ""),
             chief_complaint=data.get("chief_complaint", ""),
             hpi=data.get("hpi", ""),
@@ -826,7 +892,7 @@ Return ONLY valid JSON, no other text."""
             observation_date=observation_date,
             inpatient_date=inpatient_date,
             encounter_status="in-progress",
-            place_of_service=extracted.place_of_service or "emergency department",
+            place_of_service=extracted.place_of_service or "Emergency Department",
             chief_complaint_short=extracted.chief_complaint_short,
             chief_complaint=extracted.chief_complaint,
             conditions=extracted.conditions,
