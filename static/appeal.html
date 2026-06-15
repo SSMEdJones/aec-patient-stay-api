@@ -763,6 +763,7 @@
                         <option value="ssm_dean">SSM Health Dean Medical Group</option>
                         <option value="ssm_depaul">SSM Health DePaul Hospital - St. Louis</option>
                         <option value="ssm_oklahoma">SSM Health Oklahoma</option>
+                        <option value="ssm_stanthony_okc">SSM Health St. Anthony Hospital - Oklahoma City</option>
                         <option value="ssm_stagnes">SSM Health St. Agnes Hospital - Fond du Lac</option>
                         <option value="ssm_stclare">SSM Health St. Clare Hospital - Baraboo</option>
                         <option value="ssm_joseph_lakestlouis">SSM Health St. Joseph Hospital - Lake St. Louis</option>
@@ -770,6 +771,7 @@
                         <option value="ssm_joseph_wentzville">SSM Health St. Joseph Hospital - Wentzville</option>
                         <option value="ssm_stlouis">SSM Health St. Louis University Hospital</option>
                         <option value="ssm_stmarys">SSM Health St. Mary's Hospital - Madison</option>
+                        <option value="ssm_stmarys_jeffcity">SSM Health St. Mary's Hospital - Jefferson City</option>
                         <option value="ssm_stmarys_stlouis">SSM Health St. Mary's Hospital - St. Louis</option>
                     </select>
                 </div>
@@ -1180,6 +1182,11 @@
         }
         
         function populateForm(data) {
+            // Clear chat history when new PDF is loaded
+            chatMessages = [];
+            const chatContainer = document.getElementById('chat-messages');
+            if (chatContainer) chatContainer.innerHTML = '';
+            
             document.getElementById('session-id').value = data.session_id;
             document.getElementById('member_name').value = data.member_name || '';
             document.getElementById('dob').value = data.dob || '';
@@ -1203,15 +1210,21 @@
             // Update debug link with session ID
             document.getElementById('debug-link').href = `appeal/debug?session=${data.session_id}`;
             
-            // Check if debug UI is enabled
-            fetch('appeal/debug-enabled')
-                .then(r => r.json())
-                .then(d => {
-                    if (!d.enabled) {
-                        document.getElementById('debug-link').style.display = 'none';
-                    }
-                })
-                .catch(() => {});
+            // Hide debug button if ?nodebug query param is present (for portal launch)
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has('nodebug')) {
+                document.getElementById('debug-link').style.display = 'none';
+            } else {
+                // Check if debug UI is enabled on server
+                fetch('appeal/debug-enabled')
+                    .then(r => r.json())
+                    .then(d => {
+                        if (!d.enabled) {
+                            document.getElementById('debug-link').style.display = 'none';
+                        }
+                    })
+                    .catch(() => {});
+            }
         }
         
         // Event handlers for live preview
@@ -1295,7 +1308,38 @@
             }
         }
         
-        function handleFileSelect(file) {
+        // Auto-detect ministry from PDF text using station codes from ADMISSION RECORD
+        async function detectMinistryFromPdf(file) {
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                const page = await pdf.getPage(1);
+                const textContent = await page.getTextContent();
+                const text = textContent.items.map(item => item.str).join(' ');
+                
+                // Station codes from ADMISSION RECORD are the source of truth
+                const stationPatterns = [
+                    { pattern: /SMJC\d?/i, value: 'ssm_stmarys_jeffcity' },
+                    { pattern: /SMHC\d?/i, value: 'ssm_stmarys_stlouis' },
+                    { pattern: /DPHC\d?/i, value: 'ssm_depaul' },
+                    { pattern: /SJHW\d?/i, value: 'ssm_joseph_lakestlouis' },
+                    { pattern: /SLUH\d?/i, value: 'ssm_stlouis' },
+                ];
+                
+                for (const { pattern, value } of stationPatterns) {
+                    if (pattern.test(text)) {
+                        return value;
+                    }
+                }
+                
+                return null;
+            } catch (err) {
+                console.error('Ministry detection error:', err);
+                return null;
+            }
+        }
+        
+        async function handleFileSelect(file) {
             selectedFile = file;
             
             // Update preview display
@@ -1308,6 +1352,15 @@
             
             // Render PDF thumbnail
             renderPdfPreview(file);
+            
+            // Auto-detect and select ministry from PDF
+            const detectedMinistry = await detectMinistryFromPdf(file);
+            if (detectedMinistry && ministrySelect.querySelector(`option[value="${detectedMinistry}"]`)) {
+                ministrySelect.value = detectedMinistry;
+                // Highlight that it was auto-detected
+                ministrySelect.style.borderColor = '#059669';
+                setTimeout(() => { ministrySelect.style.borderColor = ''; }, 2000);
+            }
             
             checkUploadReady();
         }
@@ -1638,6 +1691,7 @@
                         context: {
                             chief_complaint: document.getElementById('complaint').value,
                             conditions: document.getElementById('medical_history').value.split(',').map(s => s.trim()),
+                            place_of_service: document.getElementById('place_of_service').value,
                             midnight_reason_1: document.getElementById('midnight_reason_1').value,
                             midnight_reason_2: document.getElementById('midnight_reason_2').value
                         }

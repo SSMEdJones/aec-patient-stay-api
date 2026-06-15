@@ -225,6 +225,43 @@
             border-radius: 2px;
         }
         
+        .source-text .highlight.current {
+            background: #f97316;
+            outline: 2px solid #ea580c;
+        }
+        
+        .search-nav {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+        
+        .search-nav button {
+            padding: 0.35rem 0.5rem;
+            border: 1px solid var(--border-color);
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            line-height: 1;
+        }
+        
+        .search-nav button:hover:not(:disabled) {
+            background: var(--bg-color);
+        }
+        
+        .search-nav button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .search-counter {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            min-width: 70px;
+            text-align: center;
+        }
+        
         /* Buttons */
         .btn {
             padding: 0.5rem 1rem;
@@ -444,7 +481,7 @@
         }
     </style>
 </head>
-<body>
+`<body>
     <div class="container">
         <a href="#" onclick="window.close(); return false;" class="back-link">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -661,10 +698,34 @@
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                             </svg>
-                            Generated Midnight Reason Text
+                            Patient Background (Opening Paragraph)
                         </h2>
-                        <div id="midnight-generated-text" class="source-text" style="max-height: 300px; font-size: 0.8rem;">
-                            No generated text available
+                        <div id="midnight-patient-bg" class="source-text" style="max-height: 150px; font-size: 0.8rem;">
+                            No patient background available
+                        </div>
+                    </div>
+                    
+                    <div class="card">
+                        <h2>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            Midnight Reason 1
+                        </h2>
+                        <div id="midnight-reason-1" class="source-text" style="max-height: 200px; font-size: 0.8rem;">
+                            No midnight reason 1 available
+                        </div>
+                    </div>
+                    
+                    <div class="card">
+                        <h2>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            Midnight Reason 2
+                        </h2>
+                        <div id="midnight-reason-2" class="source-text" style="max-height: 200px; font-size: 0.8rem;">
+                            No midnight reason 2 available
                         </div>
                     </div>
                 </div>
@@ -680,8 +741,13 @@
                         </h2>
                         
                         <div class="search-box">
-                            <input type="text" id="search-input" placeholder="Search for term in source text...">
+                            <input type="text" id="search-input" placeholder="Search for term in source text..." onkeydown="handleSearchKeydown(event)">
                             <button class="btn btn-primary btn-sm" onclick="searchInSource()">Search</button>
+                            <div class="search-nav" id="search-nav" style="display: none;">
+                                <button onclick="navigateMatch(-1)" title="Previous (Shift+Enter)">&#9650;</button>
+                                <span class="search-counter" id="search-counter">0 of 0</span>
+                                <button onclick="navigateMatch(1)" title="Next (Enter)">&#9660;</button>
+                            </div>
                             <button class="btn btn-outline btn-sm" onclick="clearHighlights()">Clear</button>
                         </div>
                         
@@ -826,9 +892,13 @@
             // Conditions properly used from extraction
             renderMidnightUsed('midnight-used', midnightDebug.conditions_used || []);
             
-            // Generated midnight reason text
-            document.getElementById('midnight-generated-text').textContent = 
-                midnightDebug.generated_text || 'No generated text available';
+            // Generated midnight reason outputs (separated)
+            document.getElementById('midnight-patient-bg').textContent = 
+                midnightDebug.patient_background || 'No patient background available';
+            document.getElementById('midnight-reason-1').textContent = 
+                midnightDebug.midnight_reason_1 || 'No midnight reason 1 available';
+            document.getElementById('midnight-reason-2').textContent = 
+                midnightDebug.midnight_reason_2 || 'No midnight reason 2 available';
         }
         
         function renderMidnightHallucinated(containerId, items) {
@@ -974,6 +1044,10 @@
             document.querySelector('.source-panel').scrollIntoView({ behavior: 'smooth' });
         }
         
+        // Search state
+        let currentMatchIndex = 0;
+        let allMatches = [];
+        
         function searchInSource() {
             const searchTerm = document.getElementById('search-input').value.trim().toLowerCase();
             if (!searchTerm) return;
@@ -987,24 +1061,77 @@
             
             sourceEl.innerHTML = highlighted;
             
-            // Scroll to first match
-            const firstMatch = sourceEl.querySelector('.highlight');
-            if (firstMatch) {
-                firstMatch.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }
+            // Get all matches
+            allMatches = Array.from(sourceEl.querySelectorAll('.highlight'));
+            currentMatchIndex = 0;
             
-            // Count matches
-            const matches = text.toLowerCase().split(searchTerm.toLowerCase()).length - 1;
-            if (matches > 0) {
-                showMessage(`Found ${matches} match${matches > 1 ? 'es' : ''} for "${searchTerm}"`, 'success');
+            const searchNav = document.getElementById('search-nav');
+            const searchCounter = document.getElementById('search-counter');
+            
+            if (allMatches.length > 0) {
+                // Show navigation
+                searchNav.style.display = 'flex';
+                updateMatchCounter();
+                highlightCurrentMatch();
+                showMessage(`Found ${allMatches.length} match${allMatches.length > 1 ? 'es' : ''} for "${searchTerm}"`, 'success');
             } else {
+                searchNav.style.display = 'none';
                 showMessage(`No matches found for "${searchTerm}"`, 'error');
+            }
+        }
+        
+        function updateMatchCounter() {
+            const counter = document.getElementById('search-counter');
+            counter.textContent = `${currentMatchIndex + 1} of ${allMatches.length}`;
+        }
+        
+        function highlightCurrentMatch() {
+            // Remove current highlight from all
+            allMatches.forEach(m => m.classList.remove('current'));
+            
+            // Add current highlight and scroll
+            if (allMatches[currentMatchIndex]) {
+                allMatches[currentMatchIndex].classList.add('current');
+                allMatches[currentMatchIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+        
+        function navigateMatch(direction) {
+            if (allMatches.length === 0) return;
+            
+            currentMatchIndex += direction;
+            
+            // Wrap around
+            if (currentMatchIndex < 0) currentMatchIndex = allMatches.length - 1;
+            if (currentMatchIndex >= allMatches.length) currentMatchIndex = 0;
+            
+            updateMatchCounter();
+            highlightCurrentMatch();
+        }
+        
+        function handleSearchKeydown(event) {
+            if (event.key === 'Enter') {
+                if (allMatches.length > 0) {
+                    // Navigate if we already have results
+                    event.preventDefault();
+                    if (event.shiftKey) {
+                        navigateMatch(-1);
+                    } else {
+                        navigateMatch(1);
+                    }
+                } else {
+                    // Perform search
+                    searchInSource();
+                }
             }
         }
         
         function clearHighlights() {
             document.getElementById('source-text').textContent = originalSourceText;
             document.getElementById('search-input').value = '';
+            document.getElementById('search-nav').style.display = 'none';
+            allMatches = [];
+            currentMatchIndex = 0;
         }
         
         function markAsVerified(type, idx) {
@@ -1048,79 +1175,136 @@
             }
             
             const sourceLower = originalSourceText.toLowerCase();
+            // Also create a version with no spaces for PDF extraction issues
+            const sourceNoSpaces = sourceLower.replace(/\s+/g, '');
             
-            // Common lab names and clinical terms to look for
-            const labNames = [
-                'rbc', 'rbc count', 'hemoglobin', 'hematocrit', 'neutrophil', 'lymphocyte',
-                'glucose', 'chloride', 'co2', 'calcium', 'bun', 'creatinine', 'alt', 'ast',
-                'protein', 'albumin', 'egfr', 'sodium', 'potassium', 'wbc', 'platelet',
-                'mcv', 'mch', 'mchc', 'rdw', 'mpv', 'basophil', 'eosinophil', 'monocyte',
-                'bilirubin', 'alkaline phosphatase', 'ggt', 'ldh', 'uric acid', 'magnesium',
-                'phosphorus', 'iron', 'ferritin', 'transferrin', 'b12', 'folate', 'tsh',
-                'inr', 'ptt', 'pt', 'troponin', 'bnp', 'nt-probnp', 'd-dimer', 'fibrinogen',
-                'a1c', 'hba1c', 'hemoglobin a1c', 'lipase', 'amylase', 'ck', 'cpk'
-            ];
+            // Common medical abbreviations to expand when searching
+            const abbreviations = {
+                'gad': ['generalized anxiety disorder', 'gad'],
+                'htn': ['hypertension', 'htn'],
+                'dm': ['diabetes mellitus', 'dm'],
+                'cad': ['coronary artery disease', 'cad'],
+                'chf': ['congestive heart failure', 'chf'],
+                'copd': ['chronic obstructive pulmonary disease', 'copd'],
+                'ckd': ['chronic kidney disease', 'ckd'],
+                'afib': ['atrial fibrillation', 'afib', 'a-fib'],
+                'mi': ['myocardial infarction', 'mi'],
+                'cva': ['cerebrovascular accident', 'stroke', 'cva'],
+                'tia': ['transient ischemic attack', 'tia'],
+                'dvt': ['deep vein thrombosis', 'dvt'],
+                'pe': ['pulmonary embolism', 'pe'],
+                'uti': ['urinary tract infection', 'uti'],
+            };
             
-            // Extract terms mentioned in feedback (in parentheses often)
-            const parenMatches = feedback.match(/\(([^)]+)\)/g) || [];
-            let mentionedTerms = [];
+            // Split by ✓ and ✗ markers to understand what's approved vs disputed
+            // Only look at content near ✗ markers (problems)
+            const problemSections = feedback.split(/✗/).slice(1); // Everything after each ✗
             
-            parenMatches.forEach(match => {
-                // Remove parentheses and split by comma
-                const inner = match.slice(1, -1);
-                const terms = inner.split(/[,;]/).map(t => t.trim().toLowerCase()).filter(t => t.length > 1);
-                mentionedTerms.push(...terms);
-            });
+            let disputedTerms = [];
+            let disputedValues = [];
             
-            // Also extract lab names directly mentioned in the text
-            labNames.forEach(lab => {
-                if (feedback.toLowerCase().includes(lab)) {
-                    if (!mentionedTerms.includes(lab)) {
-                        mentionedTerms.push(lab);
-                    }
+            problemSections.forEach(section => {
+                // Take only up to the next ✓ or end of section, and limit length
+                const relevantPart = section.split(/✓/)[0].substring(0, 200);
+                
+                // Skip if this is commentary about what's missing (not hallucination)
+                const missingIndicators = ['not explicitly mentioned', 'minimal/absent', 'is absent', 'are absent', 'not mentioned', 'no mention'];
+                const isMissingClaim = missingIndicators.some(m => relevantPart.toLowerCase().includes(m));
+                
+                if (!isMissingClaim) {
+                    // Extract parenthetical terms - but filter out commentary phrases
+                    const parenMatches = relevantPart.match(/\(([^)]+)\)/g) || [];
+                    parenMatches.forEach(match => {
+                        const inner = match.slice(1, -1);
+                        // Skip if it looks like commentary (contains common filler words)
+                        if (/\b(is|are|no|not|with|the|from|cited|mentioned)\b/i.test(inner)) {
+                            return;
+                        }
+                        const terms = inner.split(/[,;]/).map(t => t.trim()).filter(t => t.length > 2 && t.length < 50);
+                        disputedTerms.push(...terms);
+                    });
+                    
+                    // Extract specific values
+                    const valuePatterns = [
+                        /BP\s*(\d+\/\d+)/gi,
+                        /(?:HR|heart rate|pulse)\s*(\d+)/gi,
+                        /SpO2\s*(\d+%?)/gi,
+                        /(\d+\.?\d*\s*(?:mg\/dL|g\/dL|%|mmol|mEq|U\/L|ng|pg|mcg))/gi,
+                    ];
+                    
+                    valuePatterns.forEach(pattern => {
+                        const matches = relevantPart.match(pattern) || [];
+                        disputedValues.push(...matches.map(m => m.trim()));
+                    });
                 }
             });
             
-            // Also look for numeric values that might be mentioned
-            const numericMatches = feedback.match(/\b\d+\.?\d*\s*(%|mg|g|mmol|mEq|U|IU|ng|pg|mcg)?/g) || [];
+            // Remove duplicates
+            disputedTerms = [...new Set(disputedTerms)];
+            disputedValues = [...new Set(disputedValues)];
             
             // Results
             const results = {
-                debunked: [],   // Found in source (false positive by Langfuse)
-                confirmed: [],  // Not found (actual hallucination)
-                numeric: []     // Numeric values found/not found
+                debunked: [],
+                confirmed: [],
+                values: []
             };
             
+            // Helper function to search with fuzzy matching
+            function findInSource(term) {
+                const termLower = term.toLowerCase();
+                const termNoSpaces = termLower.replace(/\s+/g, '');
+                
+                // Direct match
+                if (sourceLower.includes(termLower)) {
+                    const idx = sourceLower.indexOf(termLower);
+                    return { found: true, context: originalSourceText.substring(Math.max(0, idx - 30), Math.min(originalSourceText.length, idx + term.length + 50)).trim() };
+                }
+                
+                // Match without spaces (PDF extraction issue)
+                if (sourceNoSpaces.includes(termNoSpaces)) {
+                    // Find approximate location
+                    const idx = sourceNoSpaces.indexOf(termNoSpaces);
+                    // This is approximate since we removed spaces
+                    return { found: true, context: `[found as "${termNoSpaces}" - PDF text may have merged words]` };
+                }
+                
+                // Try abbreviation expansion
+                if (abbreviations[termLower]) {
+                    for (const expanded of abbreviations[termLower]) {
+                        if (sourceLower.includes(expanded) || sourceNoSpaces.includes(expanded.replace(/\s+/g, ''))) {
+                            const idx = sourceLower.indexOf(expanded);
+                            if (idx >= 0) {
+                                return { found: true, context: originalSourceText.substring(Math.max(0, idx - 20), Math.min(originalSourceText.length, idx + expanded.length + 40)).trim() };
+                            }
+                            return { found: true, context: `[found as "${expanded}"]` };
+                        }
+                    }
+                }
+                
+                return { found: false };
+            }
+            
             // Check each term
-            mentionedTerms.forEach(term => {
+            disputedTerms.forEach(term => {
                 if (term.length < 2) return;
                 
-                const termLower = term.toLowerCase();
-                const found = sourceLower.includes(termLower);
-                
-                if (found) {
-                    // Find the approximate location
-                    const idx = sourceLower.indexOf(termLower);
-                    const context = originalSourceText.substring(Math.max(0, idx - 30), Math.min(originalSourceText.length, idx + term.length + 50));
-                    results.debunked.push({ term, context: context.trim() });
+                const result = findInSource(term);
+                if (result.found) {
+                    results.debunked.push({ term, context: result.context });
                 } else {
                     results.confirmed.push(term);
                 }
             });
             
-            // Check numeric values (only values > 1 and with some context)
-            numericMatches.forEach(num => {
-                const numClean = num.trim();
-                if (numClean.length < 2 || parseFloat(numClean) < 1) return;
-                
-                // Look for the number in source
-                if (sourceLower.includes(numClean.toLowerCase())) {
-                    results.numeric.push({ value: numClean, found: true });
-                }
+            // Check disputed values
+            disputedValues.forEach(value => {
+                const result = findInSource(value);
+                results.values.push({ value, found: result.found });
             });
             
             // Render results
-            renderDebunkResults(results, mentionedTerms.length);
+            renderDebunkResults(results, disputedTerms.length);
         }
         
         function renderDebunkResults(results, totalTerms) {
@@ -1130,24 +1314,27 @@
             
             let html = '';
             
-            // Summary
-            const debunkedCount = results.debunked.length;
-            const confirmedCount = results.confirmed.length;
+            // Info about what was analyzed
+            html += `
+                <div style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.75rem;">
+                    <p style="font-size: 0.8rem; color: #0369a1; margin: 0;">
+                        <strong>Analysis:</strong> Extracted ${totalTerms} disputed term(s) and ${results.values.length} value(s) from ✗ marked sections.
+                    </p>
+                </div>
+            `;
             
-            if (debunkedCount > 0) {
+            // Debunked claims
+            if (results.debunked.length > 0) {
                 html += `
                     <div style="background: #ecfdf5; border: 1px solid #10b981; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.75rem;">
                         <h4 style="color: #059669; margin: 0 0 0.5rem 0; font-size: 0.85rem;">
-                            ✅ ${debunkedCount} Claims DEBUNKED (Found in Full Source)
+                            ✅ ${results.debunked.length} Claims DEBUNKED (Found in Full Source)
                         </h4>
-                        <p style="font-size: 0.75rem; color: #047857; margin-bottom: 0.5rem;">
-                            These items exist in the PDF but Langfuse couldn't see them due to context limits:
-                        </p>
                         <ul style="font-size: 0.8rem; margin: 0; padding-left: 1.25rem; color: #065f46;">
                             ${results.debunked.map(d => `
                                 <li style="margin-bottom: 0.25rem;">
                                     <strong>${escapeHtml(d.term)}</strong>
-                                    <span style="color: #6b7280; font-size: 0.75rem;"> — found: "...${escapeHtml(d.context)}..."</span>
+                                    <span style="color: #6b7280; font-size: 0.75rem;"> — "...${escapeHtml(d.context)}..."</span>
                                 </li>
                             `).join('')}
                         </ul>
@@ -1155,15 +1342,13 @@
                 `;
             }
             
-            if (confirmedCount > 0) {
+            // Confirmed issues
+            if (results.confirmed.length > 0) {
                 html += `
                     <div style="background: #fef2f2; border: 1px solid #ef4444; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.75rem;">
                         <h4 style="color: #dc2626; margin: 0 0 0.5rem 0; font-size: 0.85rem;">
-                            ⚠️ ${confirmedCount} Terms Not Found in Source
+                            ⚠️ ${results.confirmed.length} Terms Not Found
                         </h4>
-                        <p style="font-size: 0.75rem; color: #b91c1c; margin-bottom: 0.5rem;">
-                            These terms were not found - may need manual verification:
-                        </p>
                         <ul style="font-size: 0.8rem; margin: 0; padding-left: 1.25rem; color: #991b1b;">
                             ${results.confirmed.map(t => `<li>${escapeHtml(t)}</li>`).join('')}
                         </ul>
@@ -1171,22 +1356,32 @@
                 `;
             }
             
-            if (debunkedCount === 0 && confirmedCount === 0) {
+            // Value comparisons
+            if (results.values.length > 0) {
+                const foundValues = results.values.filter(v => v.found);
+                const notFoundValues = results.values.filter(v => !v.found);
+                
+                html += `
+                    <div style="background: #fefce8; border: 1px solid #eab308; border-radius: 8px; padding: 0.75rem; margin-bottom: 0.75rem;">
+                        <h4 style="color: #a16207; margin: 0 0 0.5rem 0; font-size: 0.85rem;">
+                            📊 Value Verification
+                        </h4>
+                        <div style="font-size: 0.8rem; color: #854d0e;">
+                            ${foundValues.length > 0 ? `<p style="margin: 0.25rem 0;"><strong>Found:</strong> ${foundValues.map(v => escapeHtml(v.value)).join(', ')}</p>` : ''}
+                            ${notFoundValues.length > 0 ? `<p style="margin: 0.25rem 0; color: #b91c1c;"><strong>Not found:</strong> ${notFoundValues.map(v => escapeHtml(v.value)).join(', ')}</p>` : ''}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            if (results.debunked.length === 0 && results.confirmed.length === 0 && results.values.length === 0) {
                 html = `
                     <div style="background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 0.75rem;">
                         <p style="color: #92400e; margin: 0; font-size: 0.85rem;">
-                            No specific terms could be extracted from the feedback. Try pasting text that mentions specific lab names, conditions, or values (e.g., "RBC, Hemoglobin, Glucose").
+                            No disputed terms found. The feedback may indicate everything is correct, or uses different phrasing. 
+                            Look for words like "fabricated", "hallucinated", "differ", or "discrepancy" in disputed claims.
                         </p>
                     </div>
-                `;
-            } else {
-                // Summary line
-                const pct = totalTerms > 0 ? Math.round((debunkedCount / totalTerms) * 100) : 0;
-                html += `
-                    <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color);">
-                        <strong>Summary:</strong> ${debunkedCount} of ${totalTerms} claimed hallucinations (${pct}%) were found in the full source text. 
-                        Langfuse's LLM-as-a-Judge uses truncated context and may miss data in large documents.
-                    </p>
                 `;
             }
             

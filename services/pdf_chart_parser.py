@@ -161,6 +161,7 @@ class ExtractedChartData:
     observation_date: str = ""  # Date of observation status
     inpatient_date: str = ""    # Date transitioned to inpatient
     place_of_service: str = ""  # emergency department, hospital, urgent care, etc.
+    place_of_service_raw_code: str = ""  # Raw SERVICE code from PDF (e.g., ERS, OBS, HOSP)
     chief_complaint_short: str = ""  # Short symptom list: "abdominal pain, nausea, vomiting"
     chief_complaint: str = ""  # Full narrative for letter body
     hpi: str = ""
@@ -202,14 +203,17 @@ class PDFChartParser:
                      If False, use regex-based extraction only.
         """
         self.use_llm = use_llm
-        if use_llm:
-            self.bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
-            self.model_id = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        self.model_id = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+        # Note: bedrock client is created fresh on each call to handle credential refresh
         
         # Debug data storage - populated during extraction for verification
         self._last_source_text = ""
         self._last_faithfulness_result = {}
         self._last_extraction_timestamp = None
+    
+    def _get_bedrock_client(self):
+        """Create a fresh Bedrock client to pick up refreshed credentials."""
+        return boto3.client("bedrock-runtime", region_name="us-east-1")
     
     def get_debug_data(self) -> dict:
         """
@@ -247,6 +251,71 @@ class PDFChartParser:
                 text = page.extract_text() or ""
                 full_text += text + "\n\n"
         return full_text
+    
+    def _extract_service_code(self, text: str) -> str:
+        """
+        Extract place of service from SERVICE field in ADMISSION RECORD section.
+        
+        Service codes:
+            ERS = Emergency Room Services → Emergency Department
+            HOSPI = Hospitalist → Hospital
+            OBS = Observation → Observation Unit
+            SURG = Surgery → Hospital (Surgical)
+            
+        Returns tuple: (raw_code, human-readable place of service string)
+        """
+        import re
+        
+        # pdfplumber extracts columnar text with headers on one line and values below
+        # Look for SERVICE STATION header row, then find service code in values row
+        # Pattern: SERVICE STATION ... (newline) ... (service code)
+        service_match = re.search(
+            r'SERVICE\s+STATION.*?\n.*?\b(ERS|OBS|HOSPI?|HOSP|MED|MEDSURG|SURG|ICU|CCU|TELE|NEURO|ER|ED|EMER)\b', 
+            text, 
+            re.IGNORECASE | re.DOTALL
+        )
+        
+        # Log for debugging
+        logger.info(f"SERVICE code extraction: match={service_match.group(1) if service_match else 'None'}")
+        print(f"[DEBUG] SERVICE code extraction: match={service_match.group(1) if service_match else 'None'}", flush=True)
+        if service_match:
+            code = service_match.group(1).upper()
+            logger.info(f"SERVICE code uppercase: '{code}'")
+            
+            # Map service codes to place of service
+            service_map = {
+                'ERS': 'Emergency Department',
+                'ER': 'Emergency Department',
+                'ED': 'Emergency Department',
+                'EMER': 'Emergency Department',
+                'HOSPI': 'Hospital',
+                'HOSP': 'Hospital',
+                'MED': 'Hospital',
+                'MEDSURG': 'Hospital',
+                'OBS': 'Observation Unit',
+                'SURG': 'Hospital',
+                'SURGERY': 'Hospital',
+                'ICU': 'Hospital (ICU)',
+                'CCU': 'Hospital (CCU)',
+                'TELE': 'Hospital (Telemetry)',
+                'NEURO': 'Hospital (Neurology)',
+                'CARD': 'Hospital (Cardiology)',
+                'ORTHO': 'Hospital (Orthopedics)',
+            }
+            
+            if code in service_map:
+                result = service_map[code]
+                logger.info(f"SERVICE mapped '{code}' -> '{result}'")
+                return (code, result)
+            
+            # If code starts with known prefix
+            for prefix, pos in service_map.items():
+                if code.startswith(prefix):
+                    logger.info(f"SERVICE prefix matched '{code}' starts with '{prefix}' -> '{pos}'")
+                    return (code, pos)
+        
+        logger.info("SERVICE code extraction: no mapping found, returning empty")
+        return ("", "")  # Return empty tuple if not found - LLM will determine
     
     def _validate_extraction_faithfulness(self, extracted_data: dict, source_text: str) -> dict:
         """
@@ -374,19 +443,43 @@ class PDFChartParser:
             is_numeric = lab_value.replace(".", "").replace("-", "").replace("<", "").replace(">", "").isdigit()
             
             if is_numeric and lab_name:
-                # Build pattern: lab name within ~100 chars of value (either order)
+                # Build pattern: lab name within ~200 chars of value (either order)
                 # Examples: "RBC: 4.5" or "4.5 (RBC)" or "RBC...4.5"
                 escaped_name = re.escape(lab_name)
                 escaped_value = re.escape(lab_value)
                 
-                # Check both orderings: name...value and value...name
-                pattern1 = rf'{escaped_name}.{{0,100}}{escaped_value}'
-                pattern2 = rf'{escaped_value}.{{0,100}}{escaped_name}'
+                # Check both orderings: name...value and value...name (increased to 200 chars)
+                pattern1 = rf'{escaped_name}.{{0,200}}{escaped_value}'
+                pattern2 = rf'{escaped_value}.{{0,200}}{escaped_name}'
                 
                 name_value_together = (
                     re.search(pattern1, source_lower, re.IGNORECASE) or 
                     re.search(pattern2, source_lower, re.IGNORECASE)
                 )
+                
+                # If full name not found, try first significant word (for "BUN/Creatinine Ratio" -> "bun")
+                if not name_value_together and '/' in lab_name:
+                    first_part = lab_name.split('/')[0].strip()
+                    if len(first_part) >= 2:
+                        escaped_first = re.escape(first_part)
+                        pattern1 = rf'{escaped_first}.{{0,200}}{escaped_value}'
+                        pattern2 = rf'{escaped_value}.{{0,200}}{escaped_first}'
+                        name_value_together = (
+                            re.search(pattern1, source_lower, re.IGNORECASE) or 
+                            re.search(pattern2, source_lower, re.IGNORECASE)
+                        )
+                
+                # Also try first word for multi-word names like "Immature Reticulocyte Fraction"
+                if not name_value_together and ' ' in lab_name:
+                    first_word = lab_name.split()[0].strip()
+                    if len(first_word) >= 3:
+                        escaped_first = re.escape(first_word)
+                        pattern1 = rf'{escaped_first}.{{0,200}}{escaped_value}'
+                        pattern2 = rf'{escaped_value}.{{0,200}}{escaped_first}'
+                        name_value_together = (
+                            re.search(pattern1, source_lower, re.IGNORECASE) or 
+                            re.search(pattern2, source_lower, re.IGNORECASE)
+                        )
                 
                 if name_value_together:
                     logger.info(f"Lab VALIDATED: {lab_name}={lab_value} (found together in source)")
@@ -425,7 +518,7 @@ class PDFChartParser:
         
         return results
     
-    def _build_langfuse_excerpts(self, extracted_data: dict, source_text: str, max_chars: int = 25000) -> dict:
+    def _build_langfuse_excerpts(self, extracted_data: dict, source_text: str, max_chars: int = 50000) -> dict:
         """
         Build smart excerpts for Langfuse LLM-as-a-Judge.
         
@@ -445,14 +538,14 @@ class PDFChartParser:
         }
         
         used_chars = 0
-        context_window = 150  # chars before/after each found term
+        context_window = 250  # chars before/after each found term (increased from 150)
         
         # 1. Patient demographics (first 1000 chars typically has name, DOB, MRN)
         excerpts["patient_demographics"] = source_text[:1000]
         used_chars += 1000
         
         # 2. Find evidence for each extracted condition
-        for condition in extracted_data.get("conditions", [])[:15]:  # Top 15 conditions
+        for condition in extracted_data.get("conditions", [])[:30]:  # Top 30 conditions (increased from 15)
             if used_chars >= max_chars:
                 break
             cond_lower = condition.lower() if isinstance(condition, str) else ""
@@ -468,7 +561,7 @@ class PDFChartParser:
                     used_chars += len(excerpt) + 10
         
         # 3. Find evidence for each medication
-        for med in extracted_data.get("medications", [])[:12]:  # Top 12 meds
+        for med in extracted_data.get("medications", [])[:25]:  # Top 25 meds (increased from 12)
             if used_chars >= max_chars:
                 break
             med_name = med.get("name", "").lower() if isinstance(med, dict) else ""
@@ -484,7 +577,7 @@ class PDFChartParser:
                     used_chars += len(excerpt) + 10
         
         # 4. Find evidence for each lab value (CRITICAL - this is what Langfuse was missing)
-        for lab in extracted_data.get("lab_results", [])[:20]:  # Top 20 labs
+        for lab in extracted_data.get("lab_results", []):  # ALL labs (removed limit)
             if used_chars >= max_chars:
                 break
             lab_name = lab.get("name", "").lower() if isinstance(lab, dict) else ""
@@ -572,11 +665,13 @@ CRITICAL INSTRUCTIONS:
 - Extract all medications with their doses exactly as listed
 
 CHART TEXT:
-{text[:30000]}
+{text[:100000]}
 
 Return ONLY valid JSON, no other text."""
 
-        response = self.bedrock.converse(
+        # Create fresh client to pick up refreshed AWS credentials
+        bedrock = self._get_bedrock_client()
+        response = bedrock.converse(
             modelId=self.model_id,
             messages=[{"role": "user", "content": [{"text": prompt}]}],
             inferenceConfig={"maxTokens": 4000, "temperature": 0.1}
@@ -613,7 +708,7 @@ Return ONLY valid JSON, no other text."""
             try:
                 # Build smart excerpts that include evidence for extracted values
                 # This ensures Langfuse LLM-as-a-Judge can verify labs that appear late in doc
-                smart_excerpts = self._build_langfuse_excerpts(data, text, max_chars=25000)
+                smart_excerpts = self._build_langfuse_excerpts(data, text, max_chars=50000)
                 
                 langfuse_trace = langfuse_client.trace(
                     name="pdf-chart-extraction",
@@ -704,6 +799,14 @@ Return ONLY valid JSON, no other text."""
             except Exception as e:
                 logger.error(f"Langfuse scoring error: {e}")
         
+        # Extract place of service from SERVICE field (more reliable than LLM inference)
+        raw_code, service_code_pos = self._extract_service_code(text)
+        logger.info(f"SERVICE place_of_service result: '{service_code_pos}' (raw code: '{raw_code}')")
+        if service_code_pos:
+            data["place_of_service"] = service_code_pos
+            data["place_of_service_raw_code"] = raw_code
+            logger.info(f"Set data['place_of_service'] = '{service_code_pos}' (raw: '{raw_code}')")
+        
         # Convert to dataclass
         extracted = ExtractedChartData(
             original_name=data.get("original_name", ""),
@@ -716,6 +819,7 @@ Return ONLY valid JSON, no other text."""
             observation_date=data.get("observation_date", ""),
             inpatient_date=data.get("inpatient_date", ""),
             place_of_service=data.get("place_of_service", "Emergency Department"),
+            place_of_service_raw_code=data.get("place_of_service_raw_code", ""),
             chief_complaint_short=data.get("chief_complaint_short", ""),
             chief_complaint=data.get("chief_complaint", ""),
             hpi=data.get("hpi", ""),
@@ -893,6 +997,7 @@ Return ONLY valid JSON, no other text."""
             inpatient_date=inpatient_date,
             encounter_status="in-progress",
             place_of_service=extracted.place_of_service or "Emergency Department",
+            place_of_service_raw_code=extracted.place_of_service_raw_code or "",
             chief_complaint_short=extracted.chief_complaint_short,
             chief_complaint=extracted.chief_complaint,
             conditions=extracted.conditions,

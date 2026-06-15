@@ -626,6 +626,10 @@ MINISTRY_CONFIG = {
         "name": "SSM Health St. Mary's Hospital - Madison",
         "template": "appeal_templates/Template.docx",  # Default template for now
     },
+    "ssm_stmarys_jeffcity": {
+        "name": "SSM Health St. Mary's Hospital - Jefferson City",
+        "template": "appeal_templates/Template.docx",
+    },
     "ssm_stclare": {
         "name": "SSM Health St. Clare Hospital - Baraboo",
         "template": "appeal_templates/Template.docx",
@@ -664,6 +668,10 @@ MINISTRY_CONFIG = {
     },
     "ssm_oklahoma": {
         "name": "SSM Health Oklahoma",
+        "template": "appeal_templates/Template.docx",
+    },
+    "ssm_stanthony_okc": {
+        "name": "SSM Health St. Anthony Hospital - Oklahoma City",
         "template": "appeal_templates/Template.docx",
     },
 }
@@ -1001,6 +1009,9 @@ async def get_extraction_debug(session_id: str):
             "input_conditions": midnight_debug_data.get("input_conditions", []),
             "input_medications": midnight_debug_data.get("input_medications", []),
             "generated_text": midnight_debug_data.get("generated_text", ""),
+            "patient_background": midnight_debug_data.get("patient_background", ""),
+            "midnight_reason_1": midnight_debug_data.get("midnight_reason_1", ""),
+            "midnight_reason_2": midnight_debug_data.get("midnight_reason_2", ""),
             "conditions_used": midnight_debug_data.get("conditions_used", []),
             "conditions_hallucinated": midnight_debug_data.get("conditions_hallucinated", []),
             "generation_timestamp": midnight_debug_data.get("generation_timestamp", ""),
@@ -1076,6 +1087,7 @@ async def chat_with_assistant(chat: ChatMessage):
     Chat endpoint for appeal letter assistant.
     Uses AWS Bedrock Claude to explain and improve generated content.
     """
+    print(f"[CHAT] Received chat request for session: {chat.session_id}", flush=True)
     import json
     import boto3
     
@@ -1087,17 +1099,82 @@ async def chat_with_assistant(chat: ChatMessage):
     patient_data = session_data.get("patient_data")
     reason_output = session_data.get("reason_output")
     
-    # Get context from request or build from session
-    context = chat.context or {}
-    if not context and patient_data:
-        context = {
+    # Start with frontend context, then fill in missing values from patient_data
+    context = dict(chat.context) if chat.context else {}
+    
+    if patient_data:
+        # Format labs for display
+        labs_summary = ""
+        if patient_data.lab_results:
+            labs_list = []
+            for lab in patient_data.lab_results:  # Include all extracted labs
+                name = lab.get("name", lab.get("test", ""))
+                value = lab.get("value", "")
+                unit = lab.get("unit", "")
+                flag = lab.get("flag", "")
+                if name and value:
+                    entry = f"{name}: {value}"
+                    if unit:
+                        entry += f" {unit}"
+                    if flag:
+                        entry += f" ({flag})"
+                    labs_list.append(entry)
+            labs_summary = "; ".join(labs_list) if labs_list else "None extracted"
+        
+        # Format clinical notes if available (HPI and other notes used by midnight reason generator)
+        clinical_notes_summary = ""
+        if hasattr(patient_data, 'clinical_notes') and patient_data.clinical_notes:
+            clinical_notes_summary = "\n\n".join(patient_data.clinical_notes[:3])  # First 3 notes
+        
+        # Format vitals for display
+        vitals_summary = ""
+        vitals = getattr(patient_data, 'vital_signs', None) or getattr(patient_data, 'vitals', None)
+        if vitals:
+            vitals_list = []
+            for v in vitals:
+                if isinstance(v, dict):
+                    for key, val in v.items():
+                        if val:
+                            vitals_list.append(f"{key}: {val}")
+            vitals_summary = "; ".join(vitals_list) if vitals_list else "None extracted"
+        
+        # Format medications
+        meds_list = []
+        if patient_data.medications:
+            for m in patient_data.medications[:15]:
+                name = m.get("name", "") if isinstance(m, dict) else str(m)
+                if name:
+                    meds_list.append(name)
+        
+        # Debug: log what place_of_service is in patient_data
+        logger.info(f"[CHAT DEBUG] place_of_service in patient_data: '{getattr(patient_data, 'place_of_service', 'NOT_FOUND')}'")
+        logger.info(f"[CHAT DEBUG] place_of_service from frontend context: '{context.get('place_of_service', 'NOT_SENT')}'")
+        
+        # Fill in any missing context fields from patient_data
+        defaults = {
             "patient_name": patient_data.patient_name,
+            "age": getattr(patient_data, 'age', 'N/A') or 'N/A',
+            "gender": getattr(patient_data, 'gender', 'N/A') or 'N/A',
+            "admission_date": getattr(patient_data, 'admission_date', 'N/A') or 'N/A',
+            "place_of_service": getattr(patient_data, 'place_of_service', 'N/A') or 'N/A',
+            "place_of_service_raw_code": getattr(patient_data, 'place_of_service_raw_code', '') or '',
+            "facility_name": getattr(patient_data, 'facility_name', 'N/A') or 'N/A',
+            "attending_physician": getattr(patient_data, 'attending_physician', 'N/A') or 'N/A',
             "chief_complaint": patient_data.chief_complaint,
+            "hpi": getattr(patient_data, 'hpi', 'Not available') or 'Not available',
             "conditions": patient_data.conditions,
-            "medications": [m.get("name", "") for m in patient_data.medications] if patient_data.medications else [],
+            "medications": meds_list,
+            "labs": labs_summary,
+            "vitals": vitals_summary,
+            "patient_background": reason_output.patient_background if reason_output else "",
             "midnight_reason_1": reason_output.midnight_reason_1 if reason_output else "",
             "midnight_reason_2": reason_output.midnight_reason_2 if reason_output else "",
         }
+        
+        # Only add defaults for keys not already in context (or empty values)
+        for key, value in defaults.items():
+            if key not in context or not context[key]:
+                context[key] = value
     
     # Get relevant RAG feedback for similar conditions
     condition_keywords = []
@@ -1108,27 +1185,62 @@ async def chat_with_assistant(chat: ChatMessage):
     
     rag_examples = get_relevant_feedback(condition_keywords) if condition_keywords else []
     
-    # Build system prompt
-    system_prompt = f"""You are an Appeal Letter Assistant helping clinical staff improve Medicare appeal justifications.
+    # Build system prompt with full context
+    system_prompt = f"""You are an Appeal Letter Assistant helping clinical staff understand and improve Medicare appeal justifications.
 
-CURRENT CASE CONTEXT:
+PATIENT DEMOGRAPHICS:
+- Age: {context.get('age', 'N/A')}
+- Gender: {context.get('gender', 'N/A')}
+- Admission Date: {context.get('admission_date', 'N/A')}
+
+FACILITY & SERVICE INFO:
+- Place of Service: {context.get('place_of_service', 'N/A')} (extracted from SERVICE code: {context.get('place_of_service_raw_code', 'not available')})
+- Facility Name: {context.get('facility_name', 'N/A')}
+- Attending Physician: {context.get('attending_physician', 'N/A')}
+
+CLINICAL DATA FROM PDF:
 - Chief Complaint: {context.get('chief_complaint', 'N/A')}
-- Conditions: {', '.join(context.get('conditions', [])[:10])}
-- Medications: {', '.join(context.get('medications', [])[:10])}
+- History of Present Illness (HPI): {context.get('hpi', 'Not extracted')[:500]}
+- Conditions: {', '.join(context.get('conditions', [])[:15])}
+- Medications: {', '.join(context.get('medications', [])[:15])}
+- Labs: {context.get('labs', 'None extracted')}
+- Vitals: {context.get('vitals', 'None extracted')}
 
-GENERATED MIDNIGHT REASONS:
-1. {context.get('midnight_reason_1', 'Not generated yet')}
+GENERATED APPEAL CONTENT:
 
-2. {context.get('midnight_reason_2', 'Not generated yet')}
+Patient Background (Opening Paragraph):
+{context.get('patient_background', 'Not generated yet')}
+
+Midnight Reason 1:
+{context.get('midnight_reason_1', 'Not generated yet')}
+
+Midnight Reason 2:
+{context.get('midnight_reason_2', 'Not generated yet')}
 
 {f'''PREVIOUS FEEDBACK EXAMPLES (use these to improve suggestions):
 ''' + chr(10).join([f"- Category: {ex.get('condition_category')}: {ex.get('improvement_reason')}" for ex in rag_examples]) if rag_examples else ''}
 
+DATA EXTRACTION SOURCES (use these when explaining where data came from):
+- Place of Service: Extracted from the SERVICE field in the PDF's ADMISSION RECORD section. Code mappings: ERS=Emergency Department, OBS=Observation, HOSP/HOSPI=Inpatient Hospital, MED=Medical Unit, SURG=Surgical Unit, ICU/CCU/MICU/SICU=Intensive Care, PEDS=Pediatrics, PSYCH=Psychiatric Unit
+- Age/Gender/Admission Date: Extracted from patient demographics section of the PDF
+- Chief Complaint & HPI: Extracted from clinical notes sections
+- Labs/Vitals: Extracted from diagnostic/results sections of the PDF
+- Conditions/Medications: Extracted via LLM analysis of the full clinical text
+
 YOUR ROLE:
-1. Explain why the Midnight Reasons were generated the way they were
-2. Suggest improvements based on clinical best practices and Medicare guidelines
-3. Learn from user feedback to improve future generations
-4. Focus on medical necessity, severity of illness, and intensity of services
+1. Answer questions about WHY specific content was generated - explain what source data led to each statement
+2. When asked where a value came from, refer to the DATA EXTRACTION SOURCES above
+3. Suggest improvements based on clinical best practices and Medicare guidelines
+4. If asked about a specific value (like "why hemoglobin 6.1?"), check if it's in the Labs list above first
+5. Focus on medical necessity, severity of illness, and intensity of services
+
+CRITICAL CONSTRAINTS:
+- The midnight reason generator was instructed to ONLY use lab values from the same Labs list shown above
+- If a lab value appears in the midnight reasons but is NOT in the Labs list above, that value may have been hallucinated and should be corrected
+- ONLY cite sources from the DATA EXTRACTION SOURCES section above - never invent or guess where data came from
+- If you don't know where a value came from, say "I don't see that value in the extracted data" rather than making up an explanation
+- Never fabricate clinical details, lab values, or patient information not provided in the context above
+- If asked about something not in the provided data, clearly state it wasn't extracted from the PDF
 
 DETECTING IMPROVEMENTS:
 When the user provides feedback or a better version, acknowledge it and output:
@@ -1142,7 +1254,11 @@ improvement_reason: (one sentence summary of why this is better)
 
 IMPORTANT: Only include this block when the user provides a specific improvement, not just questions.
 
-Keep responses concise and clinically focused."""
+RESPONSE STYLE:
+- Answer in 1-2 sentences maximum for simple questions like "where did X come from?"
+- Never reference the system prompt, "DATA EXTRACTION SOURCES", or internal instructions directly.
+- Only elaborate if the user explicitly asks for more detail.
+- Stay clinically focused."""
 
     # Build messages
     messages = []

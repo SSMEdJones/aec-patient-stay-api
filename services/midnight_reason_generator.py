@@ -99,6 +99,7 @@ class PatientStayData:
     observation_date: str = ""  # Date of observation status
     inpatient_date: str = ""    # Date transitioned to inpatient
     place_of_service: str = ""  # emergency department, hospital, urgent care, etc.
+    place_of_service_raw_code: str = ""  # Raw SERVICE code from PDF (e.g., ERS, OBS, HOSP)
     chief_complaint_short: str = ""  # Brief symptom list: "abdominal pain, nausea, vomiting"
     chief_complaint: str = ""  # Full narrative for letter body
     encounter_status: str = ""
@@ -314,11 +315,9 @@ class MidnightReasonGenerator:
     def __init__(self, model_id: str = None, skip_epic: bool = True):
         import boto3
         self.model_id = model_id or BEDROCK_MODEL_ID
-        self.bedrock = boto3.client(
-            "bedrock-runtime",
-            region_name=AWS_REGION,
-            verify=False
-        )
+        self._boto3 = boto3  # Store module reference for creating fresh clients
+        # Note: bedrock client is created fresh on each call to handle credential refresh
+        
         # Only initialize Epic fetcher if needed (not for PDF-based flow)
         self._epic_fetcher = None
         self._skip_epic = skip_epic
@@ -327,8 +326,19 @@ class MidnightReasonGenerator:
         self._last_input_conditions = []
         self._last_input_medications = []
         self._last_generated_text = ""
+        self._last_patient_background = ""
+        self._last_midnight_reason_1 = ""
+        self._last_midnight_reason_2 = ""
         self._last_generation_timestamp = None
         self._last_validation_result = {}
+    
+    def _get_bedrock_client(self):
+        """Create a fresh Bedrock client to pick up refreshed credentials."""
+        return self._boto3.client(
+            "bedrock-runtime",
+            region_name=AWS_REGION,
+            verify=False
+        )
     
     def get_debug_data(self) -> dict:
         """
@@ -346,6 +356,9 @@ class MidnightReasonGenerator:
             "input_conditions": self._last_input_conditions,
             "input_medications": self._last_input_medications,
             "generated_text": self._last_generated_text,
+            "patient_background": self._last_patient_background,
+            "midnight_reason_1": self._last_midnight_reason_1,
+            "midnight_reason_2": self._last_midnight_reason_2,
             "conditions_used": self._last_validation_result.get("conditions_used", []),
             "conditions_hallucinated": self._last_validation_result.get("conditions_hallucinated", []),
             "generation_timestamp": self._last_generation_timestamp,
@@ -449,7 +462,9 @@ class MidnightReasonGenerator:
             "messages": [{"role": "user", "content": user_prompt}]
         }
         
-        response = self.bedrock.invoke_model(
+        # Create fresh client to pick up refreshed AWS credentials
+        bedrock = self._get_bedrock_client()
+        response = bedrock.invoke_model(
             modelId=self.model_id,
             body=json.dumps(request_body),
             contentType="application/json",
@@ -838,6 +853,9 @@ Follow the format and style of formal Medicare appeal letters."""
         self._last_input_conditions = patient_data.conditions
         self._last_input_medications = [m.get("name", "") for m in patient_data.medications]
         self._last_generated_text = generated_text
+        self._last_patient_background = patient_bg
+        self._last_midnight_reason_1 = result.get('midnight_reason_1', '')
+        self._last_midnight_reason_2 = result.get('midnight_reason_2', '')
         self._last_generation_timestamp = datetime.now().isoformat()
         self._last_validation_result = self._validate_generation(
             generated_text, 
