@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from docx import Document
 from docx.shared import Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 from services.midnight_reason_generator import (
     MidnightReasonGenerator, 
@@ -51,6 +52,14 @@ class AppealLetterData:
     patient_background: str = ""
     midnight_reason_1: str = ""
     midnight_reason_2: str = ""
+    
+    # Ministry/Facility info (for dynamic header)
+    ministry_name: str = ""
+    ministry_address: str = ""
+    ministry_city: str = ""
+    ministry_state: str = ""
+    ministry_zip: str = ""
+    ministry_phone: str = ""
 
 
 class AppealLetterGenerator:
@@ -100,9 +109,152 @@ class AppealLetterGenerator:
         
         return False
     
+    def _replace_in_shapes(self, element, replacements: dict):
+        """Replace placeholders in text boxes and shapes within an element.
+        
+        This handles text inside shapes that were converted from EMF/WMF graphics.
+        Shape text is stored in <w:txbxContent> elements in the XML.
+        Handles placeholders split across multiple runs while preserving line breaks.
+        """
+        from docx.oxml.ns import qn
+        from lxml import etree
+        
+        # Find all text box content elements
+        for txbx in element.iter(qn('w:txbxContent')):
+            # Find paragraphs that are direct children of this text box
+            for para_elem in txbx.findall(qn('w:p')):
+                # Collect runs and track which have line breaks after them
+                runs_data = []  # List of (run_elem, text, has_br_after)
+                run_elems = para_elem.findall(qn('w:r'))
+                
+                for run_elem in run_elems:
+                    # Get text from this run
+                    text_parts = [t.text or '' for t in run_elem.findall(qn('w:t'))]
+                    run_text = ''.join(text_parts)
+                    
+                    # Check if this run has a line break
+                    has_br = run_elem.find(qn('w:br')) is not None
+                    
+                    runs_data.append((run_elem, run_text, has_br))
+                
+                if not runs_data:
+                    continue
+                
+                # Build combined text with markers for line breaks
+                BR_MARKER = '\x00BR\x00'
+                combined_parts = []
+                for run_elem, run_text, has_br in runs_data:
+                    combined_parts.append(run_text)
+                    if has_br:
+                        combined_parts.append(BR_MARKER)
+                
+                full_text = ''.join(combined_parts)
+                if not full_text.replace(BR_MARKER, ''):
+                    continue
+                
+                # Replace placeholders
+                new_text = full_text
+                for placeholder, value in replacements.items():
+                    if placeholder in new_text:
+                        new_text = new_text.replace(placeholder, value)
+                
+                if new_text != full_text:
+                    # Collapse consecutive BR markers into single ones
+                    while BR_MARKER + BR_MARKER in new_text:
+                        new_text = new_text.replace(BR_MARKER + BR_MARKER, BR_MARKER)
+                    # Remove leading/trailing BR markers
+                    new_text = new_text.strip(BR_MARKER.strip('\x00'))
+                    if new_text.startswith(BR_MARKER):
+                        new_text = new_text[len(BR_MARKER):]
+                    if new_text.endswith(BR_MARKER):
+                        new_text = new_text[:-len(BR_MARKER)]
+                    
+                    print(f"[SHAPE] Replaced: '{full_text.replace(BR_MARKER, '[BR]')}' -> '{new_text.replace(BR_MARKER, '[BR]')}'")
+                    
+                    # Split by BR markers to get lines
+                    lines = new_text.split(BR_MARKER)
+                    
+                    # Clear existing runs
+                    for run_elem, _, _ in runs_data:
+                        for t in run_elem.findall(qn('w:t')):
+                            t.text = ''
+                        # Remove any existing br elements
+                        for br in run_elem.findall(qn('w:br')):
+                            run_elem.remove(br)
+                    
+                    # Put text in first run, with line breaks
+                    if runs_data:
+                        first_run = runs_data[0][0]
+                        first_t = first_run.find(qn('w:t'))
+                        if first_t is None:
+                            first_t = etree.SubElement(first_run, qn('w:t'))
+                        
+                        # Set first line
+                        first_t.text = lines[0] if lines else ''
+                        
+                        # Add remaining lines with <w:br/> before each
+                        for line in lines[1:]:
+                            br = etree.SubElement(first_run, qn('w:br'))
+                            t = etree.SubElement(first_run, qn('w:t'))
+                            t.text = line
+    
+    def _add_ministry_header(self, doc: Document, data: AppealLetterData):
+        """Add ministry letterhead to document header dynamically."""
+        # Debug: print what we're working with
+        print(f"[HEADER DEBUG] ministry_name: '{data.ministry_name}'")
+        print(f"[HEADER DEBUG] ministry_address: '{data.ministry_address}'")
+        
+        # Access the first section
+        section = doc.sections[0]
+        
+        # Check if template uses different first page header
+        if section.different_first_page_header_footer:
+            print("[HEADER DEBUG] Template uses different first page header")
+            header = section.first_page_header
+        else:
+            header = section.header
+        
+        header.is_linked_to_previous = False
+        
+        # Add a NEW paragraph for ministry info (preserving any existing logo/images)
+        ministry_para = header.add_paragraph()
+        
+        # Right-align for typical letterhead style
+        ministry_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
+        # Check if ministry info was provided
+        if not data.ministry_name:
+            # Mark as not found so user knows
+            run = ministry_para.add_run("** MINISTRY NOT FOUND **")
+            run.bold = True
+            run.font.size = Pt(11)
+            return
+        
+        # Add ministry name (bold)
+        run = ministry_para.add_run(data.ministry_name)
+        run.bold = True
+        run.font.size = Pt(11)
+        
+        # Add address lines
+        if data.ministry_address:
+            ministry_para.add_run(f'\n{data.ministry_address}')
+        
+        if data.ministry_city or data.ministry_state or data.ministry_zip:
+            city_state_zip = ", ".join(filter(None, [
+                data.ministry_city,
+                f"{data.ministry_state} {data.ministry_zip}".strip()
+            ]))
+            ministry_para.add_run(f'\n{city_state_zip}')
+        
+        if data.ministry_phone:
+            ministry_para.add_run(f'\n{data.ministry_phone}')
+    
     def _fill_template(self, data: AppealLetterData, output_path: Path) -> Path:
         """Fill the template with the provided data."""
         doc = Document(self.template_path)
+        
+        # Ministry header is now handled via placeholder replacement in the template
+        # Placeholders: [MinistryName], [MinistryAddress], [MinistryCity], [MinistryState], [MinistryZip], [MinistryPhone]
         
         # Mapping of placeholders to values
         # Note: Template has typo "Mednight" instead of "Midnight"
@@ -136,13 +288,33 @@ class AppealLetterGenerator:
             # Also handle correct spelling in case template is fixed
             "[MidnightReason1]": mn1_clean,
             "[MidnightReason2]": mn2_clean,
+            # Ministry/Hospital info for dynamic header
+            "[MinistryName]": data.ministry_name,
+            "[MinistryAddress]": data.ministry_address,
+            "[MinistryCity]": data.ministry_city,
+            "[MinistryState]": data.ministry_state,
+            "[MinistryZip]": data.ministry_zip,
+            "[MinistryPhone]": data.ministry_phone,
         }
         
-        # Replace in all paragraphs
+        # Replace in all paragraphs (document body)
         for paragraph in doc.paragraphs:
             for placeholder, value in replacements.items():
                 if placeholder in paragraph.text:
                     self._replace_placeholder(paragraph, placeholder, value)
+        
+        # Replace in headers (all sections, including first page header)
+        for section in doc.sections:
+            for header in [section.header, section.first_page_header]:
+                if header is None:
+                    continue
+                # Regular paragraphs in header
+                for paragraph in header.paragraphs:
+                    for placeholder, value in replacements.items():
+                        if placeholder in paragraph.text:
+                            self._replace_placeholder(paragraph, placeholder, value)
+                # Text in shapes/text boxes (for converted EMF graphics)
+                self._replace_in_shapes(header._element, replacements)
         
         # Also check tables (if any)
         for table in doc.tables:

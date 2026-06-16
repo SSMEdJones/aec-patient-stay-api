@@ -1,0 +1,222 @@
+{
+  "_comment": "Ministry configuration - derived from appeal_templates/*.docx filenames",
+  "ministries": {
+    "ssm_cardinal": {
+      "name": "SSM Health Cardinal Glennon Children's Hospital",
+      "address": "1465 S Grand Blvd",
+      "city": "St. Louis",
+      "state": "MO",
+      "zip": "63104",
+      "phone": "(314) 577-5600",
+      "template_file": "CG_1465 S Grand_Letterhead.docx",
+      "station_codes": ["CGHC", "CGH"]
+    },
+    "ssm_depaul": {
+      "name": "SSM Health DePaul Hospital",
+      "address": "12303 DePaul Dr",
+      "city": "Bridgeton",
+      "state": "MO",
+      "zip": "63044",
+      "phone": "(314) 344-6000",
+      "template_file": "DPH_StLouis_12303DePaulDr.docx",
+      "station_codes": ["DPHC"]
+    },
+    "ssm_goodsam_mtvernon": {
+      "name": "SSM Health Good Samaritan Hospital - Mt. Vernon",
+      "address": "1 Good Samaritan Way",
+      "city": "Mt. Vernon",
+      "state": "IL",
+      "zip": "62864",
+      "phone": "(618) 899-1600",
+      "template_file": "GoodSam_MtVernon Letterhead.docx",
+      "station_codes": ["GSHC"],
+      "name_patterns": ["GOOD SAMARITAN"]
+    },
+    "ssm_stclare_fenton": {
+      "name": "SSM Health St. Clare Hospital - Fenton",
+      "address": "1015 Bowles Ave",
+      "city": "Fenton",
+      "state": "MO",
+      "zip": "63026",
+      "phone": "(636) 496-2000",
+      "template_file": "SCH_Fenton_1015BowlesAve - TEMPLATE.docx",
+      "station_codes": ["SCHF"]
+    },
+    "ssm_joseph_lakestlouis": {
+      "name": "SSM Health St. Joseph Hospital - Lake St. Louis",
+      "address": "100 Medical Plaza",
+      "city": "Lake St. Louis",
+      "state": "MO",
+      "zip": "63367",
+      "phone": "(636) 625-5200",
+      "template_file": "SJH_LakeSaintLouis_100MedicalPlaza.docx",
+      "station_codes": ["SJHL"],
+      "name_patterns": ["ST JOSEPH LAKE", "STJOSEPHLAKESTLOUIS"]
+    },
+    "ssm_joseph_stcharles": {
+      "name": "SSM Health St. Joseph Hospital - St. Charles",
+      "address": "300 First Capitol Dr",
+      "city": "St. Charles",
+      "state": "MO",
+      "zip": "63301",
+      "phone": "(636) 947-5000",
+      "template_file": "SJH_StCharles_300FirstCapitolDr.docx",
+      "station_codes": ["SJHC"]
+    },
+    "ssm_stlouis": {
+      "name": "SSM Health St. Louis University Hospital",
+      "address": "1201 Grand Blvd",
+      "city": "St. Louis",
+      "state": "MO",
+      "zip": "63104",
+      "phone": "(314) 577-8000",
+      "template_file": "SLUH_1201GrandBlvd.docx",
+      "station_codes": ["SLUH"],
+      "name_patterns": ["SAINT LOUIS UNIVERSITY", "ST LOUIS UNIVERSITY"]
+    },
+    "ssm_stmarys_stlouis": {
+      "name": "SSM Health St. Mary's Hospital - St. Louis",
+      "address": "6420 Clayton Rd",
+      "city": "St. Louis",
+      "state": "MO",
+      "zip": "63117",
+      "phone": "(314) 768-8000",
+      "template_file": "SMH_StLouis_6420ClaytonRd.docx",
+      "station_codes": ["SMHC"]
+    },
+    "ssm_stmarys_jeffcity": {
+      "name": "SSM Health St. Mary's Hospital - Jefferson City",
+      "address": "2505 Mission Dr",
+      "city": "Jefferson City",
+      "state": "MO",
+      "zip": "65109",
+      "phone": "(573) 681-3000",
+      "template_file": "SMJC_2505MissionDrive.docx",
+      "station_codes": ["SMJC"]
+    },
+    "ssm_bonejoint_stanthony": {
+      "name": "SSM Health Bone and Joint Hospital at St. Anthony",
+      "address": "1111 N Dewey Ave",
+      "city": "Oklahoma City",
+      "state": "OK",
+      "zip": "73103",
+      "phone": "(405) 272-9671",
+      "template_file": "SSMHealth_Bone and Joint at StAnthony_Letterhead.docx",
+      "station_codes": ["BJHA"],
+      "name_patterns": ["BONE & JOINT", "BONE AND JOINT"]
+    },
+    "ssm_monroe": {
+      "name": "SSM Health Monroe Hospital",
+      "address": "515 22nd Ave",
+      "city": "Monroe",
+      "state": "WI",
+      "zip": "53566",
+      "phone": "(608) 324-1000",
+      "template_file": "SSMHealth_MonroeHospital_515 22nd Ave.docx",
+      "station_codes": ["MONR"]
+    },
+    "ssm_ripon": {
+      "name": "SSM Health Ripon Community Hospital",
+      "address": "933 Newbury St",
+      "city": "Ripon",
+      "state": "WI",
+      "zip": "54971",
+      "phone": "(920) 748-3101",
+      "template_file": "SSMHealth_RiponCommunityHospital_Letterhead.docx",
+      "station_codes": ["RIPC"]
+    },
+    "ssm_stagnes": {
+      "name": "SSM Health St. Agnes Hospital",
+      "address": "430 E Division St",
+      "city": "Fond du Lac",
+      "state": "WI",
+      "zip": "54935",
+      "phone": "(920) 929-2300",
+      "template_file": "SSMHealth_StAgnesHospital_Letterhead.docx",
+      "station_codes": ["SAHC"]
+    },
+    "ssm_stanthony_midwest": {
+      "name": "SSM Health St. Anthony Hospital - Midwest City",
+      "address": "2825 Parklawn Dr",
+      "city": "Midwest City",
+      "state": "OK",
+      "zip": "73110",
+      "phone": "(405) 610-3600",
+      "template_file": "SSMHealth_StAnthony_Midwest_Letterhead.docx",
+      "station_codes": ["SAMW"],
+      "name_patterns": ["ST. ANTHONY.*MIDWEST", "ST ANTHONY.*MIDWEST"]
+    },
+    "ssm_stanthony_okc": {
+      "name": "SSM Health St. Anthony Hospital - Oklahoma City",
+      "address": "1000 N Lee Ave",
+      "city": "Oklahoma City",
+      "state": "OK",
+      "zip": "73102",
+      "phone": "(405) 272-7000",
+      "template_file": "SSMHealth_StAnthony_OKC_Letterhead.docx",
+      "station_codes": ["SAOKC", "SAHO"],
+      "name_patterns": ["ST. ANTHONY.*OKLAHOMA", "ST ANTHONY.*OKLAHOMA"]
+    },
+    "ssm_stanthony_shawnee": {
+      "name": "SSM Health St. Anthony Hospital - Shawnee",
+      "address": "1102 W MacArthur St",
+      "city": "Shawnee",
+      "state": "OK",
+      "zip": "74804",
+      "phone": "(405) 273-2270",
+      "template_file": "SSMHealth_StAnthony_Shawnee_Letterhead.docx",
+      "station_codes": ["SASH"],
+      "name_patterns": ["ST. ANTHONY.*SHAWNEE", "ST ANTHONY.*SHAWNEE"]
+    },
+    "ssm_stclare": {
+      "name": "SSM Health St. Clare Hospital - Baraboo",
+      "address": "707 14th St",
+      "city": "Baraboo",
+      "state": "WI",
+      "zip": "53913",
+      "phone": "(608) 356-1400",
+      "template_file": "SSMHealth_StClareBaraboo_Letterhead.docx",
+      "station_codes": ["SCHC"]
+    },
+    "ssm_stmarys_janesville": {
+      "name": "SSM Health St. Mary's Hospital - Janesville",
+      "address": "3400 E Racine St",
+      "city": "Janesville",
+      "state": "WI",
+      "zip": "53546",
+      "phone": "(608) 373-8000",
+      "template_file": "SSMHealth_StMarysJanesville_Letterhead.docx",
+      "station_codes": ["SMHJ"]
+    },
+    "ssm_stmarys": {
+      "name": "SSM Health St. Mary's Hospital - Madison",
+      "address": "700 S Park St",
+      "city": "Madison",
+      "state": "WI",
+      "zip": "53715",
+      "phone": "(608) 251-6100",
+      "template_file": "SSMHealth_StMarysMadison_Letterhead.docx",
+      "station_codes": ["SMHM"]
+    },
+    "ssm_waupun": {
+      "name": "SSM Health Waupun Memorial Hospital",
+      "address": "620 W Brown St",
+      "city": "Waupun",
+      "state": "WI",
+      "zip": "53963",
+      "phone": "(920) 324-5581",
+      "template_file": "SSMHealth_WaupunMemorialHospital.docx",
+      "station_codes": ["WAUP"]
+    },
+    "ssm_stmarys_centralia": {
+      "name": "SSM Health St. Mary's Hospital - Centralia",
+      "address": "400 N Pleasant Ave",
+      "city": "Centralia",
+      "state": "IL",
+      "zip": "62801",
+      "phone": "(618) 436-8000",
+      "template_file": "StMarys_Centralia Letterhead.docx",
+      "station_codes": ["SMCC"]
+    }
+  }
+}

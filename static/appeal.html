@@ -758,21 +758,7 @@
                 <div class="hospital-input">
                     <label for="ministry">Ministry:</label>
                     <select id="ministry" style="flex: 1; padding: 0.5rem 0.75rem; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.9rem;">
-                        <option value="">-- Select Ministry --</option>
-                        <option value="ssm_cardinal">SSM Health Cardinal Glennon Children's Hospital</option>
-                        <option value="ssm_dean">SSM Health Dean Medical Group</option>
-                        <option value="ssm_depaul">SSM Health DePaul Hospital - St. Louis</option>
-                        <option value="ssm_oklahoma">SSM Health Oklahoma</option>
-                        <option value="ssm_stanthony_okc">SSM Health St. Anthony Hospital - Oklahoma City</option>
-                        <option value="ssm_stagnes">SSM Health St. Agnes Hospital - Fond du Lac</option>
-                        <option value="ssm_stclare">SSM Health St. Clare Hospital - Baraboo</option>
-                        <option value="ssm_joseph_lakestlouis">SSM Health St. Joseph Hospital - Lake St. Louis</option>
-                        <option value="ssm_joseph_stcharles">SSM Health St. Joseph Hospital - St. Charles</option>
-                        <option value="ssm_joseph_wentzville">SSM Health St. Joseph Hospital - Wentzville</option>
-                        <option value="ssm_stlouis">SSM Health St. Louis University Hospital</option>
-                        <option value="ssm_stmarys">SSM Health St. Mary's Hospital - Madison</option>
-                        <option value="ssm_stmarys_jeffcity">SSM Health St. Mary's Hospital - Jefferson City</option>
-                        <option value="ssm_stmarys_stlouis">SSM Health St. Mary's Hospital - St. Louis</option>
+                        <option value="">-- Loading ministries... --</option>
                     </select>
                 </div>
                 
@@ -986,6 +972,7 @@
         // State
         let currentSessionId = null;
         let selectedFile = null;
+        let ministryData = []; // Loaded from API
         
         // Elements
         const dropZone = document.getElementById('drop-zone');
@@ -1185,7 +1172,17 @@
             // Clear chat history when new PDF is loaded
             chatMessages = [];
             const chatContainer = document.getElementById('chat-messages');
-            if (chatContainer) chatContainer.innerHTML = '';
+            if (chatContainer) {
+                chatContainer.innerHTML = '';
+                // If chat is open, show intro message again
+                if (typeof chatOpen !== 'undefined' && chatOpen) {
+                    chatMessages.push({
+                        role: 'assistant',
+                        content: `Hi! I'm your Appeal Assistant. I can help you understand and improve the generated Midnight Reasons.\n\nYou can ask me:\n• "Why was Midnight Reason 1 written this way?"\n• "How can I improve this justification?"\n• "This should mention the patient's elevated troponin..."\n\nYour feedback helps improve future generations!`
+                    });
+                    renderChatMessages();
+                }
+            }
             
             document.getElementById('session-id').value = data.session_id;
             document.getElementById('member_name').value = data.member_name || '';
@@ -1308,7 +1305,7 @@
             }
         }
         
-        // Auto-detect ministry from PDF text using station codes from ADMISSION RECORD
+        // Auto-detect ministry from PDF text using station codes loaded from API
         async function detectMinistryFromPdf(file) {
             try {
                 const arrayBuffer = await file.arrayBuffer();
@@ -1317,27 +1314,68 @@
                 const textContent = await page.getTextContent();
                 const text = textContent.items.map(item => item.str).join(' ');
                 
-                // Station codes from ADMISSION RECORD are the source of truth
-                const stationPatterns = [
-                    { pattern: /SMJC\d?/i, value: 'ssm_stmarys_jeffcity' },
-                    { pattern: /SMHC\d?/i, value: 'ssm_stmarys_stlouis' },
-                    { pattern: /DPHC\d?/i, value: 'ssm_depaul' },
-                    { pattern: /SJHW\d?/i, value: 'ssm_joseph_lakestlouis' },
-                    { pattern: /SLUH\d?/i, value: 'ssm_stlouis' },
-                ];
+                console.log('Ministry detection - PDF text (first 500 chars):', text.substring(0, 500));
+                console.log('Ministry detection - ministryData count:', ministryData.length);
                 
-                for (const { pattern, value } of stationPatterns) {
-                    if (pattern.test(text)) {
-                        return value;
+                // Use station codes and name patterns from API-loaded ministry data
+                for (const ministry of ministryData) {
+                    // Check station codes
+                    if (ministry.station_codes) {
+                        for (const code of ministry.station_codes) {
+                            const pattern = new RegExp(code + '\\d?', 'i');
+                            if (pattern.test(text)) {
+                                console.log('Ministry detection - matched station code:', code, '->', ministry.code);
+                                return ministry.code;
+                            }
+                        }
+                    }
+                    // Check name patterns
+                    if (ministry.name_patterns) {
+                        for (const patternStr of ministry.name_patterns) {
+                            const pattern = new RegExp(patternStr, 'i');
+                            if (pattern.test(text)) {
+                                console.log('Ministry detection - matched name pattern:', patternStr, '->', ministry.code);
+                                return ministry.code;
+                            }
+                        }
                     }
                 }
                 
+                console.log('Ministry detection - no match found');
                 return null;
             } catch (err) {
                 console.error('Ministry detection error:', err);
                 return null;
             }
         }
+        
+        // Load ministries from API
+        let ministryLoadPromise = null;
+        async function loadMinistries() {
+            try {
+                const response = await fetch('appeal/ministries');
+                if (!response.ok) throw new Error('Failed to load ministries');
+                ministryData = await response.json();
+                
+                // Sort by name
+                ministryData.sort((a, b) => a.name.localeCompare(b.name));
+                
+                // Populate dropdown
+                ministrySelect.innerHTML = '<option value="">-- Select Ministry --</option>';
+                for (const ministry of ministryData) {
+                    const option = document.createElement('option');
+                    option.value = ministry.code;
+                    option.textContent = ministry.name;
+                    ministrySelect.appendChild(option);
+                }
+            } catch (err) {
+                console.error('Error loading ministries:', err);
+                ministrySelect.innerHTML = '<option value="">-- Error loading ministries --</option>';
+            }
+        }
+        
+        // Initialize on page load - store promise so we can await it later
+        ministryLoadPromise = loadMinistries();
         
         async function handleFileSelect(file) {
             selectedFile = file;
@@ -1352,6 +1390,11 @@
             
             // Render PDF thumbnail
             renderPdfPreview(file);
+            
+            // Wait for ministries to load before attempting detection
+            if (ministryLoadPromise) {
+                await ministryLoadPromise;
+            }
             
             // Auto-detect and select ministry from PDF
             const detectedMinistry = await detectMinistryFromPdf(file);
@@ -1445,6 +1488,21 @@
             uploadBtn.disabled = true;
             ministrySelect.selectedIndex = 0;  // Reset ministry dropdown
             appealForm.reset();
+            
+            // Clear chat history and reset intro message
+            chatMessages = [];
+            const chatContainer = document.getElementById('chat-messages');
+            if (chatContainer) {
+                chatContainer.innerHTML = '';
+                // If chat is open, show intro message again
+                if (chatOpen) {
+                    chatMessages.push({
+                        role: 'assistant',
+                        content: `Hi! I'm your Appeal Assistant. I can help you understand and improve the generated Midnight Reasons.\n\nYou can ask me:\n• "Why was Midnight Reason 1 written this way?"\n• "How can I improve this justification?"\n• "This should mention the patient's elevated troponin..."\n\nYour feedback helps improve future generations!`
+                    });
+                    renderChatMessages();
+                }
+            }
         });
         
         appealForm.addEventListener('submit', async (e) => {
@@ -1456,6 +1514,7 @@
             
             const formData = {
                 session_id: document.getElementById('session-id').value,
+                ministry: ministrySelect.value,
                 member_name: document.getElementById('member_name').value,
                 dob: document.getElementById('dob').value,
                 age: document.getElementById('age').value,
@@ -1516,6 +1575,22 @@
             uploadBtn.disabled = true;
             ministrySelect.selectedIndex = 0;  // Reset ministry dropdown
             appealForm.reset();
+            
+            // Clear chat history and reset intro message
+            chatMessages = [];
+            const chatContainer = document.getElementById('chat-messages');
+            if (chatContainer) {
+                chatContainer.innerHTML = '';
+                // If chat is open, show intro message again
+                if (chatOpen) {
+                    chatMessages.push({
+                        role: 'assistant',
+                        content: `Hi! I'm your Appeal Assistant. I can help you understand and improve the generated Midnight Reasons.\n\nYou can ask me:\n• "Why was Midnight Reason 1 written this way?"\n• "How can I improve this justification?"\n• "This should mention the patient's elevated troponin..."\n\nYour feedback helps improve future generations!`
+                    });
+                    renderChatMessages();
+                }
+            }
+            
             setStep(1);
         });
         

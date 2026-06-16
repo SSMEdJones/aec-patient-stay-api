@@ -214,6 +214,9 @@ class GenerateAppealRequest(BaseModel):
     """Request to generate final appeal document with edited data."""
     session_id: str
     
+    # Ministry selection (allows changing after upload)
+    ministry: str = ""
+    
     # All editable fields
     member_name: str
     dob: str
@@ -613,68 +616,31 @@ async def appeal_ui():
 
 @app.get("/appeal/ministries", tags=["Appeal"])
 async def get_ministries():
-    """Get list of available ministries for template selection."""
+    """Get list of available ministries for template selection, including auto-detection patterns."""
     return [
-        {"code": code, "name": info["name"]}
+        {
+            "code": code,
+            "name": info["name"],
+            "station_codes": info.get("station_codes", []),
+            "name_patterns": info.get("name_patterns", [])
+        }
         for code, info in MINISTRY_CONFIG.items()
     ]
 
 
-# Ministry Configuration (maps ministry codes to templates and display names)
-MINISTRY_CONFIG = {
-    "ssm_stmarys": {
-        "name": "SSM Health St. Mary's Hospital - Madison",
-        "template": "appeal_templates/Template.docx",  # Default template for now
-    },
-    "ssm_stmarys_jeffcity": {
-        "name": "SSM Health St. Mary's Hospital - Jefferson City",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_stclare": {
-        "name": "SSM Health St. Clare Hospital - Baraboo",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_stagnes": {
-        "name": "SSM Health St. Agnes Hospital - Fond du Lac",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_dean": {
-        "name": "SSM Health Dean Medical Group",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_stlouis": {
-        "name": "SSM Health St. Louis University Hospital",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_cardinal": {
-        "name": "SSM Health Cardinal Glennon Children's Hospital",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_depaul": {
-        "name": "SSM Health DePaul Hospital - St. Louis",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_joseph_stcharles": {
-        "name": "SSM Health St. Joseph Hospital - St. Charles",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_joseph_wentzville": {
-        "name": "SSM Health St. Joseph Hospital - Wentzville",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_joseph_lakestlouis": {
-        "name": "SSM Health St. Joseph Hospital - Lake St. Louis",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_oklahoma": {
-        "name": "SSM Health Oklahoma",
-        "template": "appeal_templates/Template.docx",
-    },
-    "ssm_stanthony_okc": {
-        "name": "SSM Health St. Anthony Hospital - Oklahoma City",
-        "template": "appeal_templates/Template.docx",
-    },
-}
+# Load ministry configuration from JSON file (single source of truth)
+def load_ministry_config():
+    """Load ministry configuration from ministries.json."""
+    config_path = Path(__file__).parent / "ministries.json"
+    try:
+        with open(config_path, "r") as f:
+            data = json.load(f)
+            return data.get("ministries", {})
+    except Exception as e:
+        logging.error(f"Failed to load ministries.json: {e}")
+        return {}
+
+MINISTRY_CONFIG = load_ministry_config()
 
 
 @app.post("/appeal/upload", response_model=AppealDataResponse, tags=["Appeal"])
@@ -740,8 +706,15 @@ async def upload_pdf_for_appeal(
         gender = patient_data.gender.lower() if patient_data.gender else ""
         gender_display = "male" if gender in ("male", "m") else "female" if gender in ("female", "f") else gender
         
-        # Get ministry info (for template selection)
-        ministry_info = MINISTRY_CONFIG.get(ministry, {"name": "", "template": "appeal_templates/Template.docx"})
+        # Get ministry info (for dynamic letterhead)
+        ministry_info = MINISTRY_CONFIG.get(ministry, {
+            "name": "",
+            "address": "",
+            "city": "",
+            "state": "",
+            "zip": "",
+            "phone": ""
+        })
         ministry_name = ministry_info["name"]
         
         # Place of service from PDF extraction (emergency department, hospital, etc.)
@@ -760,7 +733,7 @@ async def upload_pdf_for_appeal(
             "reason_output": reason_output,
             "ministry": ministry,
             "ministry_name": ministry_name,  # Hospital name for letterhead/signing
-            "ministry_template": ministry_info["template"],
+            "ministry_info": ministry_info,  # Full ministry info for dynamic header
             "account_number": patient_data.account_number,
             "insurance_name": getattr(patient_data, 'insurance_name', ''),
             "insurance_id": getattr(patient_data, 'insurance_id', ''),
@@ -848,6 +821,12 @@ async def generate_appeal_document(request: GenerateAppealRequest):
         elif request.inpatient_date:
             dos_formatted = f"{request.inpatient_date} - Inpatient"
         
+        # Get ministry info - prefer request value, fall back to session
+        if request.ministry and request.ministry in MINISTRY_CONFIG:
+            ministry_info = MINISTRY_CONFIG[request.ministry]
+        else:
+            ministry_info = session_data.get("ministry_info", {})
+        
         # Build letter data from request
         letter_data = AppealLetterData(
             member_name=request.member_name,
@@ -867,17 +846,34 @@ async def generate_appeal_document(request: GenerateAppealRequest):
             patient_background="",  # Not used in current template
             midnight_reason_1=request.midnight_reason_1,
             midnight_reason_2=request.midnight_reason_2,
+            # Ministry info for dynamic header
+            ministry_name=ministry_info.get("name", ""),
+            ministry_address=ministry_info.get("address", ""),
+            ministry_city=ministry_info.get("city", ""),
+            ministry_state=ministry_info.get("state", ""),
+            ministry_zip=ministry_info.get("zip", ""),
+            ministry_phone=ministry_info.get("phone", ""),
         )
         
         # Generate output filename: {First Initial} {Last Name} {Account Number}.docx
         import re
-        name_parts = request.member_name.strip().split()
-        if len(name_parts) >= 2:
-            first_initial = name_parts[0][0].upper()
-            last_name = name_parts[-1]
+        member_name = request.member_name.strip()
+        
+        # Handle "Last, First" format (e.g., "Eisenman, Shirley J")
+        if ',' in member_name:
+            parts = member_name.split(',', 1)
+            last_name = parts[0].strip()
+            first_parts = parts[1].strip().split() if len(parts) > 1 else []
+            first_initial = first_parts[0][0].upper() if first_parts else "X"
         else:
-            first_initial = name_parts[0][0].upper() if name_parts else "X"
-            last_name = name_parts[0] if name_parts else "Unknown"
+            # "First Last" format
+            name_parts = member_name.split()
+            if len(name_parts) >= 2:
+                first_initial = name_parts[0][0].upper()
+                last_name = name_parts[-1]
+            else:
+                first_initial = name_parts[0][0].upper() if name_parts else "X"
+                last_name = name_parts[0] if name_parts else "Unknown"
         
         # Get account number from session or request member_id
         account_number = session_data.get("account_number", "") or request.member_id
@@ -894,11 +890,17 @@ async def generate_appeal_document(request: GenerateAppealRequest):
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / filename
         
-        # Get ministry template from session (or use default)
-        ministry_template = session_data.get("ministry_template", "appeal_templates/Template.docx")
+        # Use ministry-specific template (with correct letterhead baked in)
+        template_file = ministry_info.get("template_file", "Template.docx")
+        template_path = f"appeal_templates/{template_file}"
         
-        # Fill template
-        letter_gen = AppealLetterGenerator(template_path=ministry_template)
+        # Fall back to generic template if ministry template doesn't exist
+        if not Path(template_path).exists():
+            logger.warning(f"Ministry template not found: {template_path}, using Template.docx")
+            template_path = "appeal_templates/Template.docx"
+        
+        logger.info(f"Using template: {template_path}")
+        letter_gen = AppealLetterGenerator(template_path=template_path)
         letter_gen._fill_template(letter_data, output_path)
         
         # Store output path for download
