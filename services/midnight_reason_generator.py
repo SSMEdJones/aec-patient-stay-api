@@ -665,6 +665,15 @@ FAITHFULNESS - YOU MAY ONLY USE:
 - Lab values from the LAB RESULTS list above
 - If a condition is not in the list, do NOT mention it even if it seems clinically related
 
+CLINICAL INFERENCES - LABEL THEM CLEARLY:
+- If lab values suggest a condition not explicitly diagnosed (e.g., elevated creatinine in CKD patient suggesting acute worsening), use hedging language:
+  - "findings consistent with [condition]"
+  - "laboratory values suggestive of [condition]"
+  - "creatinine elevation concerning for acute-on-chronic kidney injury"
+- Do NOT state inferred diagnoses as documented facts
+- Let the physician reviewer make the final clinical determination
+- Example: Say "CKD stage 3 with creatinine 2.8 mg/dL, findings consistent with acute exacerbation" NOT "acute on chronic kidney injury"
+
 REQUIRED LANGUAGE:
 - Include "medically necessary" somewhere in midnight_reason_1
 - Include "inpatient level of care" or similar somewhere in the output
@@ -801,6 +810,15 @@ FAITHFULNESS - YOU MAY ONLY USE:
 - Medications from the MEDICATIONS list above
 - Lab values from the LAB RESULTS list above
 - If a condition is not in the list, do NOT mention it even if it seems clinically related
+
+CLINICAL INFERENCES - LABEL THEM CLEARLY:
+- If lab values suggest a condition not explicitly diagnosed (e.g., elevated creatinine in CKD patient suggesting acute worsening), use hedging language:
+  - "findings consistent with [condition]"
+  - "laboratory values suggestive of [condition]"
+  - "creatinine elevation concerning for acute-on-chronic kidney injury"
+- Do NOT state inferred diagnoses as documented facts
+- Let the physician reviewer make the final clinical determination
+- Example: Say "CKD stage 3 with creatinine 2.8 mg/dL, findings consistent with acute exacerbation" NOT "acute on chronic kidney injury"
 
 REQUIRED LANGUAGE:
 - Include "medically necessary" somewhere in midnight_reason_1

@@ -267,8 +267,16 @@ class AppealLetterGenerator:
         mn1_clean = data.midnight_reason_1.rstrip('.,;: ')
         mn2_clean = data.midnight_reason_2.rstrip('.,;: ')
         
+        # Convert "LAST, FIRST" to "First Last" format for display
+        member_name = data.member_name
+        if ',' in member_name:
+            parts = member_name.split(',', 1)
+            last_name = parts[0].strip()
+            first_name = parts[1].strip().split()[0] if parts[1].strip() else ''
+            member_name = f"{first_name} {last_name}" if first_name else last_name
+        
         replacements = {
-            "[MemberName]": data.member_name,
+            "[MemberName]": member_name,
             "[DOB]": data.dob,
             "[Age]": data.age,
             "[Gender]": data.gender,

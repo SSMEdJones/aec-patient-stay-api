@@ -1029,6 +1029,23 @@
             step2Indicator.className = 'step';
             step3Indicator.className = 'step';
             
+            // Show/hide chat button based on step (only visible on step 2)
+            const chatBtn = document.getElementById('chat-btn');
+            const chatWindow = document.getElementById('chat-window');
+            if (chatBtn) {
+                if (step === 2) {
+                    chatBtn.style.display = 'flex';
+                } else {
+                    chatBtn.style.display = 'none';
+                    // Close chat if open when leaving step 2
+                    if (chatWindow && typeof chatOpen !== 'undefined' && chatOpen) {
+                        chatWindow.style.display = 'none';
+                        chatBtn.innerHTML = '💬';
+                        chatOpen = false;
+                    }
+                }
+            }
+            
             if (step === 1) {
                 stepUpload.classList.add('active');
                 step1Indicator.classList.add('active');
@@ -1091,7 +1108,14 @@
         }
         
         function updatePreview() {
-            const memberName = getFieldValue('member_name') || '[Member Name]';
+            let memberName = getFieldValue('member_name') || '[Member Name]';
+            // Convert "LAST, FIRST" to "First Last" for display
+            if (memberName.includes(',')) {
+                const parts = memberName.split(',');
+                const lastName = parts[0].trim();
+                const firstName = parts[1] ? parts[1].trim().split(' ')[0] : '';
+                memberName = firstName ? `${firstName} ${lastName}` : lastName;
+            }
             const dob = getFieldValue('dob') || '[DOB]';
             const age = getFieldValue('age') || '[Age]';
             const gender = getFieldValue('gender') || 'male';
@@ -1623,7 +1647,7 @@
                 font-size: 24px;
                 box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
                 z-index: 1000;
-                display: flex;
+                display: none;
                 align-items: center;
                 justify-content: center;
                 transition: transform 0.2s, box-shadow 0.2s;
