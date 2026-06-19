@@ -186,12 +186,13 @@ class AppealDataResponse(BaseModel):
     member_id: str = ""
     account_number: str = ""  # Account/encounter number from PDF
     medical_history: str = ""
-    complaint: str = ""
+    hook: str = ""  # Opening statement hook (chief complaint)
     
     # Case info (editable)
     place_of_service: str = ""  # emergency department, hospital, etc.
     observation_date: str = ""
     inpatient_date: str = ""
+    discharge_date: str = ""  # Blank if still admitted
     reference_number: str = ""
     
     # Payer info (editable)
@@ -205,6 +206,7 @@ class AppealDataResponse(BaseModel):
     # Generated content (editable)
     midnight_reason_1: str = ""
     midnight_reason_2: str = ""
+    closing_summary: str = ""
     
     # Lab results from PDF
     lab_results: List[Dict] = []
@@ -224,11 +226,12 @@ class GenerateAppealRequest(BaseModel):
     gender: str
     member_id: str
     medical_history: str
-    complaint: str
+    hook: str  # Opening statement hook (chief complaint)
     
     place_of_service: str = ""
     observation_date: str = ""
     inpatient_date: str = ""
+    discharge_date: str = ""
     reference_number: str
     
     payer_name: str = ""
@@ -239,6 +242,7 @@ class GenerateAppealRequest(BaseModel):
     
     midnight_reason_1: str
     midnight_reason_2: str
+    closing_summary: str = ""
 
 
 class ChatMessage(BaseModel):
@@ -769,10 +773,11 @@ async def upload_pdf_for_appeal(
             member_id=member_id,
             account_number=patient_data.account_number or "",
             medical_history=medical_history,
-            complaint=patient_data.chief_complaint or "evaluation and management",
+            hook=patient_data.chief_complaint or "evaluation and management",
             place_of_service=getattr(patient_data, 'place_of_service', '') or place_of_service,
             observation_date=fmt_date(getattr(patient_data, 'observation_date', '')),
             inpatient_date=fmt_date(getattr(patient_data, 'inpatient_date', '')),
+            discharge_date=fmt_date(getattr(patient_data, 'discharge_date', '')),
             reference_number="",  # User enters from denial letter
             payer_name=payer_name,
             insurance_name=getattr(patient_data, 'insurance_name', '') or "",
@@ -782,6 +787,7 @@ async def upload_pdf_for_appeal(
             zip_code=zip_code,
             midnight_reason_1=reason_output.midnight_reason_1,
             midnight_reason_2=reason_output.midnight_reason_2,
+            closing_summary=reason_output.closing_summary,
             lab_results=patient_data.lab_results or [],
         )
         
@@ -835,7 +841,7 @@ async def generate_appeal_document(request: GenerateAppealRequest):
             gender=request.gender,
             member_id=request.member_id,
             medical_history=request.medical_history,
-            complaint=request.complaint,
+            hook=request.hook,
             place_of_service=request.place_of_service or "Emergency Department",
             street_address=request.street_address,
             city=request.city,
@@ -978,10 +984,14 @@ async def get_extraction_debug(session_id: str):
     midnight_debug_data = session_data.get("midnight_debug_data", {})
     patient_data = session_data.get("patient_data")
     
-    # Get patient name for display
+    # Get patient name and hook for display
     patient_name = ""
+    hook = ""
+    chief_complaint = ""
     if patient_data:
         patient_name = getattr(patient_data, 'patient_name', '') or ''
+        hook = getattr(patient_data, 'chief_complaint_short', '') or ''
+        chief_complaint = getattr(patient_data, 'chief_complaint', '') or ''
     
     # Build Langfuse URL - link to LLM-as-a-Judge evals page
     extraction_timestamp = debug_data.get("extraction_timestamp", "")
@@ -995,6 +1005,10 @@ async def get_extraction_debug(session_id: str):
         "session_id": session_id,
         "patient_name": patient_name,
         "extraction_timestamp": extraction_timestamp,
+        # Hook (chief complaint) from PDF extraction
+        "hook": hook,
+        "chief_complaint": chief_complaint,
+        "chief_complaint_short": hook,
         # PDF Extraction debug (pdf_chart_parser)
         "faithfulness_score": debug_data.get("faithfulness_score", 0),
         "conditions_validated": debug_data.get("conditions_validated", []),
@@ -1014,6 +1028,7 @@ async def get_extraction_debug(session_id: str):
             "patient_background": midnight_debug_data.get("patient_background", ""),
             "midnight_reason_1": midnight_debug_data.get("midnight_reason_1", ""),
             "midnight_reason_2": midnight_debug_data.get("midnight_reason_2", ""),
+            "closing_summary": midnight_debug_data.get("closing_summary", ""),
             "conditions_used": midnight_debug_data.get("conditions_used", []),
             "conditions_hallucinated": midnight_debug_data.get("conditions_hallucinated", []),
             "generation_timestamp": midnight_debug_data.get("generation_timestamp", ""),
@@ -1168,6 +1183,8 @@ async def chat_with_assistant(chat: ChatMessage):
             "medications": meds_list,
             "labs": labs_summary,
             "vitals": vitals_summary,
+            "insurance_name": getattr(patient_data, 'insurance_name', '') or '',
+            "insurance_address": getattr(patient_data, 'insurance_address', '') or '',
             "patient_background": reason_output.patient_background if reason_output else "",
             "midnight_reason_1": reason_output.midnight_reason_1 if reason_output else "",
             "midnight_reason_2": reason_output.midnight_reason_2 if reason_output else "",
@@ -1194,6 +1211,10 @@ PATIENT DEMOGRAPHICS:
 - Age: {context.get('age', 'N/A')}
 - Gender: {context.get('gender', 'N/A')}
 - Admission Date: {context.get('admission_date', 'N/A')}
+
+PAYER INFO (from PDF if available):
+- Insurance/Payer Name: {context.get('insurance_name', 'Not extracted - user enters from denial letter')}
+- Insurance Address: {context.get('insurance_address', 'Not extracted')}
 
 FACILITY & SERVICE INFO:
 - Place of Service: {context.get('place_of_service', 'N/A')} (extracted from SERVICE code: {context.get('place_of_service_raw_code', 'not available')})
@@ -1223,6 +1244,7 @@ Midnight Reason 2:
 ''' + chr(10).join([f"- Category: {ex.get('condition_category')}: {ex.get('improvement_reason')}" for ex in rag_examples]) if rag_examples else ''}
 
 DATA EXTRACTION SOURCES (use these when explaining where data came from):
+- Payer/Insurance Info: Extracted from INSURANCE section of the PDF when available (looks for "INSURANCE 1", payer names like UHC, Humana, Aetna). If not found in PDF, user enters from denial letter.
 - Place of Service: Extracted from the SERVICE field in the PDF's ADMISSION RECORD section. Code mappings: ERS=Emergency Department, OBS=Observation, HOSP/HOSPI=Inpatient Hospital, MED=Medical Unit, SURG=Surgical Unit, ICU/CCU/MICU/SICU=Intensive Care, PEDS=Pediatrics, PSYCH=Psychiatric Unit
 - Age/Gender/Admission Date: Extracted from patient demographics section of the PDF
 - Chief Complaint & HPI: Extracted from clinical notes sections

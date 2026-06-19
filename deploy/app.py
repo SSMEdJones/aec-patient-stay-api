@@ -151,17 +151,20 @@ class AppealDataResponse(BaseModel):
     age: str = ""
     gender: str = ""
     member_id: str = ""
+    account_number: str = ""  # Account/encounter number from PDF
     medical_history: str = ""
-    complaint: str = ""
+    hook: str = ""  # Opening statement hook (chief complaint)
     
     # Case info (editable)
+    place_of_service: str = ""  # emergency department, hospital, etc.
     observation_date: str = ""
     inpatient_date: str = ""
-    place_of_service: str = ""
+    discharge_date: str = ""  # Blank if still admitted
     reference_number: str = ""
     
     # Payer info (editable)
     payer_name: str = ""
+    insurance_name: str = ""  # Original extracted insurance name
     street_address: str = ""
     city: str = ""
     state: str = ""
@@ -170,11 +173,18 @@ class AppealDataResponse(BaseModel):
     # Generated content (editable)
     midnight_reason_1: str = ""
     midnight_reason_2: str = ""
+    closing_summary: str = ""
+    
+    # Lab results from PDF
+    lab_results: List[Dict] = []
 
 
 class GenerateAppealRequest(BaseModel):
     """Request to generate final appeal document with edited data."""
     session_id: str
+    
+    # Ministry selection (allows changing after upload)
+    ministry: str = ""
     
     # All editable fields
     member_name: str
@@ -183,11 +193,12 @@ class GenerateAppealRequest(BaseModel):
     gender: str
     member_id: str
     medical_history: str
-    complaint: str
+    hook: str  # Opening statement hook (chief complaint)
     
+    place_of_service: str = ""
     observation_date: str = ""
     inpatient_date: str = ""
-    place_of_service: str
+    discharge_date: str = ""
     reference_number: str
     
     payer_name: str = ""
@@ -198,6 +209,7 @@ class GenerateAppealRequest(BaseModel):
     
     midnight_reason_1: str
     midnight_reason_2: str
+    closing_summary: str = ""
 
 
 class ChatMessage(BaseModel):
@@ -711,19 +723,24 @@ async def upload_pdf_for_appeal(
             age=str(patient_data.age) if patient_data.age else "",
             gender=gender_display,
             member_id=member_id,
+            account_number=patient_data.account_number or "",
             medical_history=medical_history,
-            complaint=patient_data.chief_complaint or "evaluation and management",
+            hook=patient_data.chief_complaint or "evaluation and management",
+            place_of_service=ministry_name,
             observation_date=fmt_date(getattr(patient_data, 'observation_date', '')),
             inpatient_date=fmt_date(getattr(patient_data, 'inpatient_date', '')),
-            place_of_service=ministry_name,
+            discharge_date=fmt_date(getattr(patient_data, 'discharge_date', '')),
             reference_number=random_ref_num,
             payer_name="Medicare Advantage Plan",
+            insurance_name=getattr(patient_data, 'insurance_name', '') or "",
             street_address="PO Box 0000",
             city="City",
             state="ST",
             zip_code="00000",
             midnight_reason_1=reason_output.midnight_reason_1,
             midnight_reason_2=reason_output.midnight_reason_2,
+            closing_summary=reason_output.closing_summary,
+            lab_results=getattr(patient_data, 'lab_results', []) or [],
         )
         
     except Exception as e:
@@ -766,7 +783,7 @@ async def generate_appeal_document(request: GenerateAppealRequest):
             gender=request.gender,
             member_id=request.member_id,
             medical_history=request.medical_history,
-            complaint=request.complaint,
+            hook=request.hook,
             place_of_service=request.place_of_service,
             street_address=request.street_address,
             city=request.city,
@@ -777,6 +794,7 @@ async def generate_appeal_document(request: GenerateAppealRequest):
             patient_background="",  # Not used in current template
             midnight_reason_1=request.midnight_reason_1,
             midnight_reason_2=request.midnight_reason_2,
+            closing_summary=request.closing_summary,
         )
         
         # Generate output filename: {First Initial} {Last Name} {Account Number}.docx
@@ -818,7 +836,7 @@ async def generate_appeal_document(request: GenerateAppealRequest):
         return {
             "success": True,
             "filename": filename,
-            "download_url": f"download/{session_id}"
+            "download_url": f"appeal/download/{session_id}"
         }
         
     except Exception as e:

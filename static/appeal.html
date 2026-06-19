@@ -492,6 +492,18 @@
             border-radius: 2px;
         }
         
+        /* Field highlight on focus */
+        .field-highlight {
+            background: linear-gradient(120deg, #fef08a 0%, #fde047 100%) !important;
+            box-shadow: 0 0 0 2px #facc15;
+            border-radius: 3px;
+            transition: all 0.2s ease;
+        }
+        
+        .letter-field[data-field] {
+            transition: all 0.2s ease;
+        }
+        
         /* Buttons */
         .btn {
             padding: 0.6rem 1.25rem;
@@ -787,6 +799,34 @@
                         <input type="hidden" id="session-id">
                         
                         <!-- Patient Information -->
+                        <!-- Payer Information -->
+                        <div class="card">
+                            <h2>Payer Information</h2>
+                            <div class="form-group full-width">
+                                <label for="payer_name">Payer Name</label>
+                                <input type="text" id="payer_name" name="payer_name">
+                            </div>
+                            <div class="form-group full-width">
+                                <label for="street_address">Street Address</label>
+                                <input type="text" id="street_address" name="street_address">
+                            </div>
+                            <div class="compact-row" style="grid-template-columns: 2fr 1fr 1fr;">
+                                <div class="form-group">
+                                    <label for="city">City</label>
+                                    <input type="text" id="city" name="city">
+                                </div>
+                                <div class="form-group">
+                                    <label for="state">State</label>
+                                    <input type="text" id="state" name="state" maxlength="2">
+                                </div>
+                                <div class="form-group">
+                                    <label for="zip_code">ZIP Code</label>
+                                    <input type="text" id="zip_code" name="zip_code">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Patient Information -->
                         <div class="card">
                             <h2>Patient Information</h2>
                             <div class="compact-row">
@@ -810,19 +850,38 @@
                                     </select>
                                 </div>
                             </div>
-                            <div class="form-grid">
+                            <div class="compact-row">
                                 <div class="form-group">
                                     <label for="member_id">Member ID</label>
                                     <input type="text" id="member_id" name="member_id">
                                 </div>
                                 <div class="form-group">
-                                    <label for="medical_history">Past Medical History</label>
-                                    <input type="text" id="medical_history" name="medical_history" placeholder="HTN, DM, HLD...">
+                                    <label for="reference_number">Reference Number</label>
+                                    <input type="text" id="reference_number" name="reference_number">
                                 </div>
+                                <div class="form-group">
+                                    <label for="observation_date">Observation Date</label>
+                                    <input type="text" id="observation_date" name="observation_date" placeholder="MM/DD/YYYY">
+                                </div>
+                                <div class="form-group">
+                                    <label for="inpatient_date">Inpatient Date</label>
+                                    <input type="text" id="inpatient_date" name="inpatient_date" placeholder="MM/DD/YYYY">
+                                </div>
+                                <!-- discharge_date is hidden - used only during LLM generation for closing summary -->
+                                <input type="hidden" id="discharge_date" name="discharge_date">
+                            </div>
+                        </div>
+                        
+                        <!-- Clinical Information -->
+                        <div class="card">
+                            <h2>Clinical Information</h2>
+                            <div class="form-group full-width">
+                                <label for="medical_history">Past Medical History</label>
+                                <textarea id="medical_history" name="medical_history" placeholder="HTN, DM, HLD..." rows="2"></textarea>
                             </div>
                             <div class="form-group full-width">
-                                <label for="complaint">Chief Complaint</label>
-                                <textarea id="complaint" name="complaint"></textarea>
+                                <label for="hook">Hook (Chief Complaint)</label>
+                                <textarea id="hook" name="hook"></textarea>
                             </div>
                         </div>
                         
@@ -833,51 +892,6 @@
                                 <label for="place_of_service">Place of Service</label>
                                 <input type="text" id="place_of_service" name="place_of_service" placeholder="emergency department">
                                 <small class="helper-text">Department type: emergency department, hospital, urgent care, clinic</small>
-                            </div>
-                            <div class="compact-row">
-                                <div class="form-group">
-                                    <label for="observation_date">Observation Date</label>
-                                    <input type="text" id="observation_date" name="observation_date" placeholder="MM/DD/YYYY">
-                                    <small class="helper-text">Date patient was placed on observation status. Leave blank for direct admits.</small>
-                                </div>
-                                <div class="form-group">
-                                    <label for="inpatient_date">Inpatient Date</label>
-                                    <input type="text" id="inpatient_date" name="inpatient_date" placeholder="MM/DD/YYYY">
-                                    <small class="helper-text">Date converted to inpatient. Leave blank for observation-only appeals.</small>
-                                </div>
-                                <div class="form-group">
-                                    <label for="reference_number">Reference Number</label>
-                                    <input type="text" id="reference_number" name="reference_number">
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <!-- Payer Information -->
-                        <div class="card">
-                            <h2>Payer Information</h2>
-                            <div class="form-grid">
-                                <div class="form-group full-width">
-                                    <label for="payer_name">Payer Name</label>
-                                    <input type="text" id="payer_name" name="payer_name">
-                                </div>
-                                <div class="form-group full-width">
-                                    <label for="street_address">Street Address</label>
-                                    <input type="text" id="street_address" name="street_address">
-                                </div>
-                            </div>
-                            <div class="compact-row" style="grid-template-columns: 2fr 1fr 1fr;">
-                                <div class="form-group">
-                                    <label for="city">City</label>
-                                    <input type="text" id="city" name="city">
-                                </div>
-                                <div class="form-group">
-                                    <label for="state">State</label>
-                                    <input type="text" id="state" name="state" maxlength="2">
-                                </div>
-                                <div class="form-group">
-                                    <label for="zip_code">ZIP Code</label>
-                                    <input type="text" id="zip_code" name="zip_code">
-                                </div>
                             </div>
                         </div>
                         
@@ -891,6 +905,10 @@
                             <div class="form-group">
                                 <label for="midnight_reason_2">Midnight Reason 2 (Additional Justification)</label>
                                 <textarea id="midnight_reason_2" name="midnight_reason_2" class="large" required></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="closing_summary">Closing Summary</label>
+                                <textarea id="closing_summary" name="closing_summary" class="large"></textarea>
                             </div>
                         </div>
                         
@@ -1006,9 +1024,9 @@
         // Form fields for preview
         const previewFields = [
             'member_name', 'dob', 'age', 'gender', 'member_id', 'medical_history', 
-            'complaint', 'place_of_service', 'observation_date', 'inpatient_date',
+            'hook', 'place_of_service', 'observation_date', 'inpatient_date',
             'reference_number', 'payer_name', 'street_address', 'city', 'state', 
-            'zip_code', 'midnight_reason_1', 'midnight_reason_2'
+            'zip_code', 'midnight_reason_1', 'midnight_reason_2', 'closing_summary'
         ];
         
         // Utility functions
@@ -1067,11 +1085,12 @@
             return el ? el.value : '';
         }
         
-        function formatField(value, placeholder = '[Not provided]') {
+        function formatField(value, placeholder = '[Not provided]', fieldId = null) {
+            const dataAttr = fieldId ? ` data-field="${fieldId}"` : '';
             if (!value || value.trim() === '') {
-                return `<span class="letter-field empty">${placeholder}</span>`;
+                return `<span class="letter-field empty"${dataAttr}>${placeholder}</span>`;
             }
-            return `<span class="highlight">${value}</span>`;
+            return `<span class="letter-field highlight"${dataAttr}>${value}</span>`;
         }
         
         function getArticle(age) {
@@ -1088,14 +1107,21 @@
             const obs = getFieldValue('observation_date');
             const inp = getFieldValue('inpatient_date');
             
+            const obsSpan = obs ? 
+                `<span class="letter-field highlight" data-field="observation_date">${obs}</span> (Observation)` :
+                '<span class="letter-field empty" data-field="observation_date">[Observation Date]</span>';
+            const inpSpan = inp ?
+                `<span class="letter-field highlight" data-field="inpatient_date">${inp}</span> (Inpatient, current)` :
+                '<span class="letter-field empty" data-field="inpatient_date">[Inpatient Date]</span>';
+            
             if (obs && inp) {
-                return `${obs} - Observation<br>&nbsp;&nbsp;${inp} – Current, Inpatient`;
+                return `${obsSpan},<br>&nbsp;&nbsp;${inpSpan}`;
             } else if (obs) {
-                return `${obs} - Observation`;
+                return obsSpan;
             } else if (inp) {
-                return `${inp} - Inpatient`;
+                return inpSpan.replace(', current', '');
             }
-            return '[Date of Service]';
+            return '<span class="letter-field empty">[Date of Service]</span>';
         }
         
         function getMinistryName() {
@@ -1121,7 +1147,12 @@
             const gender = getFieldValue('gender') || 'male';
             const memberId = getFieldValue('member_id') || '[Member ID]';
             const medHistory = getFieldValue('medical_history') || '[Medical History]';
-            const complaint = getFieldValue('complaint') || '[Chief Complaint]';
+            let hook = getFieldValue('hook') || '';
+            // Lowercase first letter (inserted mid-sentence: "with complaints of lower back pain")
+            if (hook && hook.length > 0) {
+                hook = hook[0].toLowerCase() + hook.slice(1);
+            }
+            hook = hook || '[Hook]';
             const refNumber = getFieldValue('reference_number') || '[Reference #]';
             const payerName = getFieldValue('payer_name') || '[Payer Name]';
             const streetAddress = getFieldValue('street_address') || '[Street Address]';
@@ -1130,6 +1161,7 @@
             const zipCode = getFieldValue('zip_code') || '[ZIP]';
             const mn1 = getFieldValue('midnight_reason_1') || '[Midnight Reason 1]';
             const mn2 = getFieldValue('midnight_reason_2') || '[Midnight Reason 2]';
+            const closingSummary = getFieldValue('closing_summary') || '[Closing Summary]';
             
             const article = getArticle(age);
             const dosHeader = formatDOS();
@@ -1143,17 +1175,17 @@
                 
                 <div class="letter-section">
                     <div class="letter-section-title">Payer Information</div>
-                    <div>${formatField(payerName)}</div>
-                    <div>${formatField(streetAddress)}</div>
-                    <div>${formatField(city)}, ${formatField(state)} ${formatField(zipCode)}</div>
+                    <div>${formatField(payerName, '[Payer Name]', 'payer_name')}</div>
+                    <div>${formatField(streetAddress, '[Street Address]', 'street_address')}</div>
+                    <div>${formatField(city, '[City]', 'city')}, ${formatField(state, '[ST]', 'state')} ${formatField(zipCode, '[ZIP]', 'zip_code')}</div>
                 </div>
                 
                 <div class="letter-section">
                     <div class="letter-section-title">Reference</div>
-                    <div><strong>Re:</strong> ${formatField(memberName)}</div>
-                    <div><strong>DOB:</strong> ${formatField(dob)}</div>
-                    <div><strong>Member ID:</strong> ${formatField(memberId)}</div>
-                    <div><strong>Reference #:</strong> ${formatField(refNumber)}</div>
+                    <div><strong>Re:</strong> ${formatField(memberName, '[Member Name]', 'member_name')}</div>
+                    <div><strong>DOB:</strong> ${formatField(dob, '[DOB]', 'dob')}</div>
+                    <div><strong>Member ID:</strong> ${formatField(memberId, '[Member ID]', 'member_id')}</div>
+                    <div><strong>Reference #:</strong> ${formatField(refNumber, '[Reference #]', 'reference_number')}</div>
                     <div><strong>DOS:</strong> ${dosHeader}</div>
                 </div>
                 
@@ -1163,24 +1195,37 @@
                 
                 <div class="letter-body">
                     <p>
-                        We are writing this letter on behalf of ${formatField(memberName)}, 
-                        ${article} ${formatField(age)}-year-old ${formatField(gender)} with 
-                        a past medical history of ${formatField(medHistory)}, who presented to the ${formatField(getMinistryName())} with complaints of ${formatField(complaint)}.
+                        We are writing this letter on behalf of ${formatField(memberName, '[Member Name]', 'member_name')}, 
+                        ${article} ${formatField(age, '[Age]', 'age')}-year-old ${formatField(gender, '[Gender]', 'gender')} with 
+                        a past medical history of ${formatField(medHistory, '[Medical History]', 'medical_history')}, who presented to the ${formatField(getMinistryName(), '[Place of Service]', 'place_of_service')} with complaints of ${formatField(hook, '[Hook]', 'hook')}.
                     </p>
                     
                     <p>
-                        The first midnight was medically necessary for ${formatField(mn1)}.
+                        The first midnight was medically necessary for ${formatField(mn1, '[Midnight Reason 1]', 'midnight_reason_1')}.
                     </p>
                     
                     <p>
-                        The second midnight was medically necessary for ${formatField(mn2)}.
+                        The second midnight was medically necessary for ${formatField(mn2, '[Midnight Reason 2]', 'midnight_reason_2')}, which meets 2MN requiring inpatient level of care.
                     </p>
                     
                     <p>
-                        Based on the clinical presentation, severity of illness, and intensity of services required, 
-                        we respectfully request that the observation stay be converted to inpatient status. 
-                        The patient met criteria for inpatient admission at the time of presentation given the 
-                        complexity of their condition and the level of care required.
+                        ${formatField(closingSummary, '[Closing Summary]', 'closing_summary')}
+                    </p>
+                    
+                    <p style="margin-top: 1rem;">
+                        In my medical opinion, the standard decision timeframe would seriously jeopardize the enrollee's health and recovery outcomes, and I respectfully request an expedited reconsideration. Accordingly, Section 40.8 of the Medicare Managed Care and Part D Appeals Guidance demands that Medicare Advantage Organizations (MAO) "process [the request] as expedited." And Section 50.8 reiterates that MAO may not dismiss this "valid, timely appeal request of an adverse coverage decision solely because [the] enrollee is concurrently receiving or has already received the item/service/drug that is the subject of the appeal."
+                    </p>
+                    
+                    <p>
+                        The Medicare Act guarantees the enrollee coverage of the requested inpatient services. MA Plans may not impose conditions for coverage that are more restrictive than those for Traditional Medicare. See 42 C.F.R. § 422.101(b)(2). MAO must, therefore, provide coverage of the enrollee's admission because it meets the Medicare criteria listed in 42 C.F.R. § 412.3(d)(1), and that expectation is based on the patient's medical complexity, see id. § 412.3(d)(1)(i).
+                    </p>
+                    
+                    <p>
+                        Additionally note that per CMS, reconsideration dismissals are addressed under Subpart M §422.582 (f), and instances where enrollees are without financial liability fall outside of Subpart M.
+                    </p>
+                    
+                    <p>
+                        MAO coverage denial violates 42 C.F.R. § 422.10(b)(2) because it is based on third party review criteria that are more restrictive than the Medicare conditions for coverage. Accordingly, I look forward to an expedited and favorable decision in this enrollee's appeal of MAOs denial of medically necessary inpatient care.
                     </p>
                 </div>
                 
@@ -1215,10 +1260,15 @@
             document.getElementById('gender').value = data.gender || 'male';
             document.getElementById('member_id').value = data.member_id || '';
             document.getElementById('medical_history').value = data.medical_history || '';
-            document.getElementById('complaint').value = data.complaint || '';
+            // Lowercase first letter of hook for natural sentence flow
+            const hookVal = data.hook || '';
+            document.getElementById('hook').value = hookVal.length > 0 
+                ? hookVal[0].toLowerCase() + hookVal.slice(1) 
+                : '';
             document.getElementById('place_of_service').value = data.place_of_service || '';
             document.getElementById('observation_date').value = data.observation_date || '';
             document.getElementById('inpatient_date').value = data.inpatient_date || '';
+            document.getElementById('discharge_date').value = data.discharge_date || '';
             document.getElementById('reference_number').value = data.reference_number || '';
             document.getElementById('payer_name').value = data.payer_name || '';
             document.getElementById('street_address').value = data.street_address || '';
@@ -1227,6 +1277,7 @@
             document.getElementById('zip_code').value = data.zip_code || '';
             document.getElementById('midnight_reason_1').value = data.midnight_reason_1 || '';
             document.getElementById('midnight_reason_2').value = data.midnight_reason_2 || '';
+            document.getElementById('closing_summary').value = data.closing_summary || '';
             
             // Update debug link with session ID
             document.getElementById('debug-link').href = `appeal/debug?session=${data.session_id}`;
@@ -1248,12 +1299,30 @@
             }
         }
         
+        // Helper function to highlight field in preview
+        function highlightPreviewField(fieldId, highlight) {
+            const previewSpans = document.querySelectorAll(`[data-field="${fieldId}"]`);
+            previewSpans.forEach(span => {
+                if (highlight) {
+                    span.classList.add('field-highlight');
+                    // Scroll into view if not visible
+                    span.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                } else {
+                    span.classList.remove('field-highlight');
+                }
+            });
+        }
+        
         // Event handlers for live preview
         previewFields.forEach(fieldId => {
             const field = document.getElementById(fieldId);
             if (field) {
                 field.addEventListener('input', updatePreview);
                 field.addEventListener('change', updatePreview);
+                
+                // Highlight corresponding field in preview on focus
+                field.addEventListener('focus', () => highlightPreviewField(fieldId, true));
+                field.addEventListener('blur', () => highlightPreviewField(fieldId, false));
             }
         });
         
@@ -1545,9 +1614,10 @@
                 gender: document.getElementById('gender').value,
                 member_id: document.getElementById('member_id').value,
                 medical_history: document.getElementById('medical_history').value,
-                complaint: document.getElementById('complaint').value,
+                hook: document.getElementById('hook').value,
                 observation_date: document.getElementById('observation_date').value,
                 inpatient_date: document.getElementById('inpatient_date').value,
+                discharge_date: document.getElementById('discharge_date').value,
                 reference_number: document.getElementById('reference_number').value,
                 payer_name: document.getElementById('payer_name').value,
                 street_address: document.getElementById('street_address').value,
@@ -1555,7 +1625,8 @@
                 state: document.getElementById('state').value,
                 zip_code: document.getElementById('zip_code').value,
                 midnight_reason_1: document.getElementById('midnight_reason_1').value,
-                midnight_reason_2: document.getElementById('midnight_reason_2').value
+                midnight_reason_2: document.getElementById('midnight_reason_2').value,
+                closing_summary: document.getElementById('closing_summary').value
             };
             
             try {
@@ -1576,6 +1647,15 @@
                 
                 document.getElementById('download-filename').textContent = data.filename;
                 document.getElementById('download-link').href = data.download_url;
+                
+                // Reset download button for new generation
+                const downloadLink = document.getElementById('download-link');
+                downloadLink.classList.remove('disabled');
+                downloadLink.style.pointerEvents = 'auto';
+                downloadLink.style.opacity = '1';
+                // Reset button text
+                const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>`;
+                downloadLink.innerHTML = svgIcon + ' Download Document';
                 
                 setStep(3);
                 
@@ -1616,6 +1696,17 @@
             }
             
             setStep(1);
+        });
+        
+        // Handle download button click - mark step 3 as completed and change text
+        document.getElementById('download-link').addEventListener('click', function() {
+            // Mark step 3 as completed (green)
+            step3Indicator.classList.remove('active');
+            step3Indicator.classList.add('completed');
+            
+            // Change button text to indicate re-download is available
+            const svgIcon = this.querySelector('svg').outerHTML;
+            this.innerHTML = svgIcon + ' Download Again';
         });
         
         // ============================================
@@ -1788,7 +1879,7 @@
                         message: message,
                         conversation_history: chatMessages.slice(0, -1), // Exclude "Thinking..."
                         context: {
-                            chief_complaint: document.getElementById('complaint').value,
+                            chief_complaint: document.getElementById('hook').value,
                             conditions: document.getElementById('medical_history').value.split(',').map(s => s.trim()),
                             place_of_service: document.getElementById('place_of_service').value,
                             midnight_reason_1: document.getElementById('midnight_reason_1').value,
