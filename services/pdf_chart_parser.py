@@ -160,6 +160,7 @@ class ExtractedChartData:
     admission_date: str = ""
     observation_date: str = ""  # Date of observation status
     inpatient_date: str = ""    # Date transitioned to inpatient
+    discharge_date: str = ""    # Date discharged (blank if still admitted)
     place_of_service: str = ""  # emergency department, hospital, urgent care, etc.
     place_of_service_raw_code: str = ""  # Raw SERVICE code from PDF (e.g., ERS, OBS, HOSP)
     chief_complaint_short: str = ""  # Short symptom list: "abdominal pain, nausea, vomiting"
@@ -614,7 +615,7 @@ class PDFChartParser:
         prompt = f"""Extract clinical data from this patient chart. Return JSON with these fields:
 
 {{
-    "original_name": "patient's full name",
+    "original_name": "patient's full name in FIRST LAST format (e.g., 'John Smith' not 'Smith, John')",
     "original_dob": "date of birth (MM/DD/YYYY)",
     "original_mrn": "medical record number",
     "account_number": "account number or encounter number (look for ACCOUNT NO., Account #, Encounter, FIN, Visit Number)",
@@ -623,9 +624,10 @@ class PDFChartParser:
     "admission_date": "first admission/observation date (MM/DD/YYYY)",
     "observation_date": "date patient was on observation status - usually first day (MM/DD/YYYY or null if not mentioned)",
     "inpatient_date": "date patient transitioned to inpatient status - usually day after observation (MM/DD/YYYY or null if not mentioned)",
-    "place_of_service": "Determine initial point of care: If 'presents via EMS', 'arrived by ambulance', 'brought to ED', or 'emergency department' → use 'Emergency Department'. If direct admission to floor/unit without ED → use 'Hospital'. If outpatient → 'Urgent Care' or 'Clinic'.",
-    "chief_complaint": "Full narrative: Extract from CHIEF COMPLAINT and HPI sections. Include presenting symptoms, timeline, severity, and associated symptoms. Use PAST TENSE. Do NOT add diagnoses or clinical findings not explicitly stated. Example: 'altered mental status and generalized weakness with progressive decline over 3 days'",
-    "chief_complaint_short": "Brief symptom list only: 'chest pain, shortness of breath'",
+    "discharge_date": "date patient was discharged (MM/DD/YYYY) - look for DISCHARGE DATE/TIME field. If no discharge date found or patient is still admitted, use null",
+    "place_of_service": "Determine INITIAL point of arrival: If patient 'presents via EMS', 'arrived by ambulance', 'brought by EMS', 'transported by EMS', or mentions '911' → use 'Emergency Department'. If direct admission without ambulance → use 'Hospital'. If outpatient → 'Urgent Care' or 'Clinic'.",
+    "chief_complaint": "Write a 2-paragraph OPENING HOOK (70-90 words total) for an appeal letter. Format: PARAGRAPH 1: 'Your member required acute inpatient level of care beginning [admission_date], for management of [primary diagnosis with complications].' PARAGRAPH 2: '[He/She] has a history of [2-3 most relevant conditions with dates]. [He/She] was admitted from [ED/clinic] for [key presenting symptoms]. Hospital-level care was required due to [1-2 specific reasons].' Use **bold** for dates and diagnoses. Be concise - pick only the MOST relevant history.",
+    "chief_complaint_short": "Brief symptom list only: 'syncope, unresponsiveness'",
     "hpi": "history of present illness summary - VERBATIM from chart (2-4 sentences with timeline and key details)",
     "conditions": ["CHRONIC DISEASES ONLY from PAST MEDICAL HISTORY section. Extract EXACTLY as written. Do NOT include acute symptoms."],
     "medications": [
@@ -657,8 +659,8 @@ CRITICAL INSTRUCTIONS:
 - LAB VALUES: Extract ONLY from structured LAB TABLES with columns. Narrative text like "CBC showing anemia 7 down from 9.8" means hemoglobin is 7, NOT a different number. Use the EXACT numeric values shown.
 - LAB FLAGS: Only mark 'H' or 'L' if explicitly shown next to value. Do NOT infer flags - leave blank if not marked.
 - CONDITIONS: Extract ONLY from PAST MEDICAL HISTORY section, not from narrative or assessment.
-- PLACE OF SERVICE: If patient was ADMITTED to a hospital unit (ICU, neuro-tele, med-surg, etc.), use "hospital" NOT "emergency department". Only use "emergency department" if the entire encounter was ED-only without admission.
-- CHIEF COMPLAINT: Keep brief (1-2 sentences). Do NOT include full HPI narrative. Example: "generalized weakness and altered mental status"
+- PLACE OF SERVICE: Determine based on HOW patient arrived, not current unit. If transported by EMS/ambulance → "Emergency Department". If walked in or direct admit → "Hospital". The SERVICE code (MED, SURG, etc.) shows current unit, not arrival point.
+- CHIEF COMPLAINT (HOOK): Write a persuasive 2-paragraph opening for an appeal letter. Paragraph 1 must state inpatient care was required and list the diagnosis with complications. Paragraph 2 must include: relevant medical/surgical history with dates, admission source (ED, clinic, direct admit), and specific presenting symptoms (e.g., 'diarrhea up to 8 times per day', 'severe abdominal pain'). Use bolding with ** around key terms like dates and diagnoses. Convey why hospital-level care was medically necessary.
 - ONLY include information explicitly stated in the chart - do NOT infer or make up findings
 - Do NOT add clinical findings like tachycardia, fever, hypotension unless explicitly documented with values
 - Extract conditions EXACTLY as written in PAST MEDICAL HISTORY
@@ -799,13 +801,28 @@ Return ONLY valid JSON, no other text."""
             except Exception as e:
                 logger.error(f"Langfuse scoring error: {e}")
         
-        # Extract place of service from SERVICE field (more reliable than LLM inference)
-        raw_code, service_code_pos = self._extract_service_code(text)
-        logger.info(f"SERVICE place_of_service result: '{service_code_pos}' (raw code: '{raw_code}')")
-        if service_code_pos:
-            data["place_of_service"] = service_code_pos
-            data["place_of_service_raw_code"] = raw_code
-            logger.info(f"Set data['place_of_service'] = '{service_code_pos}' (raw: '{raw_code}')")
+        # Extract place of service - check for EMS/ambulance transport first
+        # If patient arrived by EMS, they started in the ER regardless of current unit
+        chief_complaint = data.get("chief_complaint", "").lower()
+        hpi = data.get("hpi", "").lower()
+        arrival_text = chief_complaint + " " + hpi
+        
+        ems_keywords = ["ems", "ambulance", "911", "transported by", "brought by ambulance", "arrived via ems"]
+        arrived_by_ems = any(kw in arrival_text for kw in ems_keywords)
+        
+        if arrived_by_ems:
+            # Patient arrived by EMS - initial arrival point was Emergency Department
+            data["place_of_service"] = "Emergency Department"
+            data["place_of_service_raw_code"] = "EMS"
+            logger.info(f"Set place_of_service = 'Emergency Department' (EMS transport detected in chief complaint)")
+        else:
+            # Fall back to SERVICE code extraction for current unit
+            raw_code, service_code_pos = self._extract_service_code(text)
+            logger.info(f"SERVICE place_of_service result: '{service_code_pos}' (raw code: '{raw_code}')")
+            if service_code_pos:
+                data["place_of_service"] = service_code_pos
+                data["place_of_service_raw_code"] = raw_code
+                logger.info(f"Set data['place_of_service'] = '{service_code_pos}' (raw: '{raw_code}')")
         
         # Convert to dataclass
         extracted = ExtractedChartData(
@@ -818,6 +835,7 @@ Return ONLY valid JSON, no other text."""
             admission_date=data.get("admission_date", ""),
             observation_date=data.get("observation_date", ""),
             inpatient_date=data.get("inpatient_date", ""),
+            discharge_date=data.get("discharge_date", ""),
             place_of_service=data.get("place_of_service", "Emergency Department"),
             place_of_service_raw_code=data.get("place_of_service_raw_code", ""),
             chief_complaint_short=data.get("chief_complaint_short", ""),
@@ -940,6 +958,20 @@ Return ONLY valid JSON, no other text."""
                 continue
         return date_str  # Return as-is if no format matches
     
+    def _normalize_name(self, name: str) -> str:
+        """Convert 'Last, First' format to 'First Last' format."""
+        if not name:
+            return ""
+        name = name.strip()
+        # Check for "Last, First" or "Last, First Middle" pattern
+        if "," in name:
+            parts = [p.strip() for p in name.split(",", 1)]
+            if len(parts) == 2:
+                last = parts[0]
+                first_middle = parts[1]
+                return f"{first_middle} {last}"
+        return name
+    
     def deidentify(self, extracted: ExtractedChartData, skip_deidentify: bool = False) -> PatientStayData:
         """
         Convert extracted data to PatientStayData, optionally de-identified.
@@ -952,7 +984,7 @@ Return ONLY valid JSON, no other text."""
         """
         # Use original name or generate synthetic
         if skip_deidentify:
-            patient_name = extracted.original_name
+            patient_name = self._normalize_name(extracted.original_name)
             patient_id = extracted.original_mrn or extracted.account_number
         else:
             patient_name = self._generate_synthetic_name(extracted.gender)
@@ -967,6 +999,7 @@ Return ONLY valid JSON, no other text."""
         admission_date = self._normalize_date(extracted.admission_date)
         observation_date = self._normalize_date(extracted.observation_date) if extracted.observation_date else ""
         inpatient_date = self._normalize_date(extracted.inpatient_date) if extracted.inpatient_date else ""
+        discharge_date = self._normalize_date(extracted.discharge_date) if extracted.discharge_date else ""
         
         # Use extracted age, or calculate from DOB
         age = extracted.age
@@ -995,7 +1028,8 @@ Return ONLY valid JSON, no other text."""
             admission_date=admission_date,
             observation_date=observation_date,
             inpatient_date=inpatient_date,
-            encounter_status="in-progress",
+            discharge_date=discharge_date,
+            encounter_status="in-progress" if not discharge_date else "finished",
             place_of_service=extracted.place_of_service or "Emergency Department",
             place_of_service_raw_code=extracted.place_of_service_raw_code or "",
             chief_complaint_short=extracted.chief_complaint_short,
@@ -1022,6 +1056,176 @@ Return ONLY valid JSON, no other text."""
         )
         
         return patient_data
+    
+    def _extract_raw_chief_complaint(self, source_text: str) -> str:
+        """Extract raw chief complaint / HPI / surgical history from PDF text for evaluator.
+        
+        This finds the source material that the LLM should synthesize into a narrative hook.
+        Returns up to 15000 chars of relevant source text to allow proper verification.
+        """
+        if not source_text:
+            return ""
+        
+        source_lower = source_text.lower()
+        excerpts = []
+        
+        # Common section headers - expanded to include imaging, medications, surgical history
+        section_patterns = [
+            ("chief complaint", 500),
+            ("reason for visit", 500),
+            ("cc:", 300),
+            ("history of present illness", 800),
+            ("hpi:", 600),
+            ("presenting complaint", 500),
+            ("past medical history", 800),
+            ("pmh:", 600),
+            ("surgical history", 1000),
+            ("past surgical", 1000),
+            ("procedure", 800),
+            ("bypass", 400),
+            ("amputation", 400),
+            # Imaging results - specific markers found in PDFs
+            ("ct lumbar spine", 1200),
+            ("mri lumbar spine", 1200),
+            ("ct abdomen", 1200),
+            ("ct pelvis", 1200),
+            ("x-ray lumbar", 800),
+            ("xray lumbar", 800),
+            ("imaging studies", 600),
+            # Direct condition terms - capture context around these
+            ("spondylolysis", 500),
+            ("anterolisthesis", 500),
+            ("stenosis", 400),
+            ("degenerative", 400),
+            ("fat necrosis", 400),
+            ("necrosis", 400),
+            # Infections and diagnoses
+            ("uti", 300),
+            ("urinary tract infection", 400),
+            ("present on admission", 600),
+            # Medications & clinical course
+            ("decadron", 400),
+            ("dexamethasone", 400),
+            ("started on", 300),
+            ("clinical course", 600),
+            ("hospital day", 400),
+        ]
+        
+        for pattern, max_len in section_patterns:
+            idx = source_lower.find(pattern)
+            if idx >= 0:
+                # Extract text after the header
+                start = max(0, idx - 50)  # Include some context before
+                end = min(len(source_text), idx + max_len)
+                excerpt = source_text[start:end].strip()
+                
+                # Find natural end (next section header or double newline)
+                for end_marker in ["\n\n", "ALLERGIES", "SOCIAL HISTORY", "REVIEW OF SYSTEMS", "FAMILY HISTORY"]:
+                    marker_idx = excerpt.upper().find(end_marker)
+                    if marker_idx > 50:  # Don't cut too short
+                        excerpt = excerpt[:marker_idx].strip()
+                        break
+                
+                if excerpt and excerpt not in excerpts:
+                    excerpts.append(excerpt)
+        
+        # Combine excerpts up to 15000 chars
+        result = " | ".join(excerpts)
+        return result[:15000] if len(result) > 15000 else result
+    
+    def _log_hook_to_langfuse(self, patient_data: PatientStayData, source_text: str = ""):
+        """Log the hook (chief complaint) as a separate generation for Langfuse evaluation.
+        
+        This triggers the hook-evaluator to assess the extracted chief complaint.
+        Uses the full chief_complaint (same as what goes in the appeal letter).
+        
+        Args:
+            patient_data: The extracted patient data with synthesized hook
+            source_text: Raw PDF text - used to extract source chief complaint/HPI for evaluator
+        """
+        if not langfuse_client:
+            return
+        
+        try:
+            # Use full chief_complaint - this matches what goes in the document (app.py line 776)
+            hook = patient_data.chief_complaint or patient_data.chief_complaint_short
+            if not hook:
+                return
+            
+            # Extract raw chief complaint / HPI from source PDF text for evaluator comparison
+            raw_chief_complaint = self._extract_raw_chief_complaint(source_text) if source_text else ""
+            
+            # Input context for evaluator - use RAW source text, not synthesized hook
+            input_data = {
+                "raw_chief_complaint": raw_chief_complaint,  # Source text from PDF
+                "conditions": patient_data.conditions[:5]
+            }
+            
+            # Create a trace for hook evaluation
+            # Send hook as plain string - evaluators typically use {{output}} directly
+            trace = langfuse_client.trace(
+                name="hook",
+                input=input_data,
+                output=hook,  # Plain string for {{output}} in evaluator
+                metadata={
+                    "patient_name": patient_data.patient_name,
+                    "component": "hook"
+                }
+            )
+            
+            # Create generation for hook evaluator - also plain string
+            generation = trace.generation(
+                name="generation",
+                model="claude-sonnet-4-20250514",
+                input=input_data,
+                output=hook  # Plain string - evaluator uses {{output}}
+            )
+            generation.end()
+            
+            # Log context size for debugging
+            logger.info(f"Langfuse hook input: {len(raw_chief_complaint)} chars source context")
+            
+            # Add heuristic scores
+            # Target: 70-90 words for new 2-paragraph format. Penalty for >120 words
+            hook_len = len(hook)
+            hook_words = len(hook.split())
+            if hook_words < 50:
+                length_score = hook_words / 50 * 0.5  # Too short
+            elif hook_words <= 100:
+                length_score = 1.0  # Ideal range (70-100 words)
+            elif hook_words <= 120:
+                length_score = 0.8  # Acceptable but long
+            else:
+                length_score = max(0.4, 0.8 - (hook_words - 120) / 100)  # Penalty for >120 words
+            trace.score(
+                name="hook_length",
+                value=length_score,
+                comment=f"Hook: {hook_words} words (ideal: 70-100, penalty >120)"
+            )
+            
+            # Check for past tense (simple heuristic)
+            past_tense_indicators = ["presented", "complained", "reported", "experienced", "had", "was", "were", "became", "arrived", "transported"]
+            past_tense_found = any(ind in hook.lower() for ind in past_tense_indicators)
+            trace.score(
+                name="hook_past_tense",
+                value=1.0 if past_tense_found else 0.5,
+                comment=f"Past tense: {'yes' if past_tense_found else 'no'}"
+            )
+            
+            # Check for rich narrative context (location, arrival mode, etc.)
+            context_indicators = ["ems", "ambulance", "emergency", "hospital", "restaurant", "home", "arrived", "transported", "alert", "oriented"]
+            context_found = sum(1 for ind in context_indicators if ind in hook.lower())
+            context_score = min(1.0, context_found / 4)  # Want at least 4 context elements
+            trace.score(
+                name="hook_context",
+                value=context_score,
+                comment=f"Narrative context: {context_found} elements found"
+            )
+            
+            langfuse_client.flush()
+            logger.info("Langfuse hook generation logged")
+        except Exception as e:
+            logger.error(f"Langfuse hook logging error: {e}")
     
     def parse_and_deidentify(self, pdf_path: str, skip_deidentify: bool = False) -> PatientStayData:
         """
@@ -1051,6 +1255,9 @@ Return ONLY valid JSON, no other text."""
         else:
             print("De-identifying patient data...")
         patient_data = self.deidentify(extracted, skip_deidentify=skip_deidentify)
+        
+        # Log hook to Langfuse for evaluation - pass source text for raw chief complaint extraction
+        self._log_hook_to_langfuse(patient_data, source_text=text)
         
         print(f"Created patient: {patient_data.patient_name}")
         return patient_data

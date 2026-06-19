@@ -98,6 +98,7 @@ class PatientStayData:
     admission_date: str = ""
     observation_date: str = ""  # Date of observation status
     inpatient_date: str = ""    # Date transitioned to inpatient
+    discharge_date: str = ""    # Date discharged (blank if still admitted)
     place_of_service: str = ""  # emergency department, hospital, urgent care, etc.
     place_of_service_raw_code: str = ""  # Raw SERVICE code from PDF (e.g., ERS, OBS, HOSP)
     chief_complaint_short: str = ""  # Brief symptom list: "abdominal pain, nausea, vomiting"
@@ -125,6 +126,7 @@ class MidnightReasonOutput:
     patient_background: str  # Opening paragraph about patient
     midnight_reason_1: str   # First midnight justification
     midnight_reason_2: str   # Second midnight justification (if applicable)
+    closing_summary: str = ""  # Closing paragraph about continued hospitalization/discharge
     
     # Metadata
     generated_at: str = ""
@@ -329,6 +331,7 @@ class MidnightReasonGenerator:
         self._last_patient_background = ""
         self._last_midnight_reason_1 = ""
         self._last_midnight_reason_2 = ""
+        self._last_closing_summary = ""
         self._last_generation_timestamp = None
         self._last_validation_result = {}
     
@@ -359,6 +362,7 @@ class MidnightReasonGenerator:
             "patient_background": self._last_patient_background,
             "midnight_reason_1": self._last_midnight_reason_1,
             "midnight_reason_2": self._last_midnight_reason_2,
+            "closing_summary": self._last_closing_summary,
             "conditions_used": self._last_validation_result.get("conditions_used", []),
             "conditions_hallucinated": self._last_validation_result.get("conditions_hallucinated", []),
             "generation_timestamp": self._last_generation_timestamp,
@@ -447,12 +451,15 @@ class MidnightReasonGenerator:
     def _call_llm(self, system_prompt: str, user_prompt: str, 
                   temperature: float = 0.3, max_tokens: int = 2000,
                   trace_name: str = "midnight-reason",
-                  patient_context: dict = None) -> str:
+                  patient_context: dict = None) -> tuple:
         """Call AWS Bedrock Claude model.
         
         Args:
             patient_context: Optional dict with patient data for Langfuse tracing.
                              Should include conditions, medications, labs for faithfulness checks.
+        
+        Returns:
+            Tuple of (output_text, langfuse_trace or None)
         """
         request_body = {
             "anthropic_version": "bedrock-2023-05-31",
@@ -475,6 +482,7 @@ class MidnightReasonGenerator:
         output_text = response_body["content"][0]["text"]
         
         # Log to Langfuse if enabled (v2 API)
+        trace = None
         if langfuse_client:
             try:
                 usage = response_body.get("usage", {})
@@ -487,13 +495,15 @@ class MidnightReasonGenerator:
                 else:
                     input_data = {"system": system_prompt[:1000], "user": user_prompt[:1000]}
                 
-                # Don't truncate output - midnight reasons need full visibility for evaluation
+                # Create main trace
                 trace = langfuse_client.trace(
                     name=trace_name,
                     input=input_data,
                     output={"response": output_text},
                     metadata={"model": self.model_id, "temperature": temperature}
                 )
+                
+                # Main LLM generation span
                 trace.generation(
                     name="llm-call",
                     model=self.model_id,
@@ -505,31 +515,100 @@ class MidnightReasonGenerator:
                     }
                 )
                 
-                # Add quality scores
-                # Output length score (reasonable length = better quality)
-                output_len = len(output_text)
-                length_score = min(1.0, output_len / 500)  # Expect ~500+ chars for good response
-                trace.score(
-                    name="output_length",
-                    value=length_score,
-                    comment=f"Output length: {output_len} chars"
-                )
-                
-                # Check for clinical justification keywords
-                justification_keywords = ["patient", "condition", "require", "monitor", "treatment"]
-                keywords_found = sum(1 for kw in justification_keywords if kw.lower() in output_text.lower())
-                trace.score(
-                    name="clinical_relevance",
-                    value=keywords_found / len(justification_keywords),
-                    comment=f"{keywords_found}/{len(justification_keywords)} clinical keywords present"
-                )
-                
-                langfuse_client.flush()
-                logger.info("Langfuse trace and scores sent")
+                logger.info("Langfuse trace created")
             except Exception as e:
                 logger.error(f"Langfuse error: {e}")
         
-        return output_text
+        return output_text, trace
+    
+    def _log_components_to_langfuse(self, trace, result: dict, patient_context: dict = None):
+        """Log each generated component as a separate TRACE in Langfuse.
+        
+        This creates separate traces for LLM evaluators to pick up:
+        - midnight_reason_1 -> appears in Traces tab
+        - midnight_reason_2 -> appears in Traces tab
+        - closing_summary -> appears in Traces tab
+        
+        Note: Hook is evaluated separately via pdf_chart_parser
+        """
+        if not langfuse_client:
+            return
+        
+        try:
+            # Format patient context as input for evaluators
+            input_data = {}
+            if patient_context:
+                input_data = {
+                    "patient_name": patient_context.get('patient_name', ''),
+                    "discharge_date": patient_context.get('discharge_date', ''),
+                    "conditions": patient_context.get('conditions', []),
+                    "medications": patient_context.get('medications', []),
+                    "lab_results": patient_context.get('lab_results', []),
+                    "chief_complaint": patient_context.get('chief_complaint', '')
+                }
+            
+            # Component definitions: (id, display_name)
+            components = [
+                ("midnight_reason_1", "Midnight Reason 1"),
+                ("midnight_reason_2", "Midnight Reason 2"),
+                ("closing_summary", "Closing Summary"),
+            ]
+            
+            for comp_id, comp_name in components:
+                comp_text = result.get(comp_id, "")
+                if comp_text:
+                    # Create a separate TRACE for each component
+                    # This makes them show up in Traces tab for evaluator matching
+                    comp_trace = langfuse_client.trace(
+                        name=comp_id,  # e.g., "midnight_reason_1"
+                        input=input_data,  # Direct dict, not wrapped
+                        output=comp_text,  # Direct string, not wrapped
+                        metadata={
+                            "component": comp_id,
+                            "component_name": comp_name
+                        }
+                    )
+                    
+                    # Also add a generation under this trace
+                    generation = comp_trace.generation(
+                        name="generation",
+                        model="claude-sonnet-4-20250514",
+                        input=input_data,
+                        output=comp_text
+                    )
+                    generation.end()
+                    
+                    # Add heuristic scores to the component trace
+                    text_len = len(comp_text)
+                    
+                    if comp_id == "midnight_reason_1":
+                        expected_len = 300
+                        keywords = ["management", "monitoring", "medically", "necessary", "requiring"]
+                    elif comp_id == "midnight_reason_2":
+                        expected_len = 300
+                        keywords = ["continued", "IV", "monitoring", "treatment", "2MN", "inpatient"]
+                    else:  # closing_summary
+                        expected_len = 150
+                        keywords = ["hospitalization", "required", "continued", "treatment"]
+                    
+                    length_score = min(1.0, text_len / expected_len)
+                    comp_trace.score(
+                        name="length",
+                        value=length_score,
+                        comment=f"{comp_name}: {text_len} chars (expected {expected_len}+)"
+                    )
+                    
+                    keywords_found = sum(1 for kw in keywords if kw.lower() in comp_text.lower())
+                    comp_trace.score(
+                        name="relevance",
+                        value=keywords_found / len(keywords),
+                        comment=f"{comp_name}: {keywords_found}/{len(keywords)} keywords"
+                    )
+            
+            langfuse_client.flush()
+            logger.info("Langfuse component traces logged")
+        except Exception as e:
+            logger.error(f"Langfuse component logging error: {e}")
     
     def _format_patient_data(self, data: PatientStayData) -> str:
         """Format patient data for the LLM prompt."""
@@ -544,6 +623,7 @@ class MidnightReasonGenerator:
         
         lines.append("## ADMISSION INFORMATION")
         lines.append(f"Admission Date: {data.admission_date}")
+        lines.append(f"Discharge Date: {data.discharge_date if data.discharge_date else '(still admitted)'}")
         lines.append(f"Chief Complaint: {data.chief_complaint or 'Not specified'}")
         lines.append(f"Encounter Status: {data.encounter_status}")
         lines.append("")
@@ -621,11 +701,18 @@ Your task is to generate three components for a Medicare inpatient appeal letter
    - Monitoring requirements (continuous telemetry, pulse oximetry, etc.)
 
 3. **MidnightReason2** (Second Midnight): This will be inserted after "The second midnight was medically necessary for" - so start with a list of services/treatments. Include:
+   - MUST include "continued hospitalization" or "ongoing inpatient care" phrase
+   - MUST differentiate from Day 1 using progression language like "continued from Day 1", "progressing", "ongoing", "Day 2 required"
    - Continued IV medications and adjustments
    - Therapy evaluations (PT evaluation, OT evaluation)
    - Consultations (cardiology, wound care, etc.)
    - Discharge planning complexity (Case Management, Social Work engagement)
    - DO NOT end with "which meets 2MN" or similar - the template already includes that text
+
+4. **Closing Summary**: A brief closing paragraph about the patient's current status:
+   - If discharge_date is blank (patient still admitted): Start with "[Patient name] continues to require hospitalization for [primary condition]. Ongoing treatment includes [key treatments]."
+   - If discharge_date is provided (patient discharged): Start with "[Patient name] required continued hospitalization through [discharge date] for [primary condition]. Treatment included [key treatments]."
+   - This paragraph should summarize the clinical justification for the entire hospital stay.
 
 CRITICAL FORMATTING:
 - MidnightReason1 should start with "management of [condition] requiring..." NOT "The first midnight..." or "due to..."
@@ -657,12 +744,17 @@ Generate the patient background paragraph, MidnightReason1, and MidnightReason2 
 
 CRITICAL FORMATTING RULES:
 - midnight_reason_1 must start with "management of [condition] requiring..." (NOT "The first midnight..." or "due to...")
-- midnight_reason_2 must start with treatment/service list like "IV [medication], continued..." (NOT "The second midnight..." or "due to...")
+- midnight_reason_2 must START with a specific treatment/service list like "[Medication name] continuation, [therapy] evaluation..." (NOT "continued hospitalization..." or "The second midnight..." or "due to...")
+- midnight_reason_2 MUST include "continued hospitalization" or "ongoing inpatient care" phrase LATER in the text (not at the start)
+- midnight_reason_2 MUST include "two-midnight" or "2MN" phrase (e.g., "meeting two-midnight criteria" or "justifying 2MN status")
+- midnight_reason_2 MUST differentiate from Day 1 using progression language (e.g., "continued from Day 1", "progressing", "Day 2 required")
+- Example midnight_reason_2 start: "Methocarbamol and lidocaine patch continuation, physical therapy evaluation, serial laboratory monitoring..." NOT "Continued hospitalization for..."
 
 FAITHFULNESS - YOU MAY ONLY USE:
 - Conditions from the CONDITIONS list above - do NOT invent or infer additional diagnoses
-- Medications from the MEDICATIONS list above
+- Medications from the MEDICATIONS list above - do NOT mention medications not in the list (e.g., if no steroids in list, do NOT say "steroid therapy")
 - Lab values from the LAB RESULTS list above
+- If a medication class is implied by chief complaint but not in MEDICATIONS list, use hedging: "pain management as clinically indicated" NOT "IV opioids"
 - If a condition is not in the list, do NOT mention it even if it seems clinically related
 
 CLINICAL INFERENCES - LABEL THEM CLEARLY:
@@ -686,13 +778,15 @@ Follow the format and style of formal Medicare appeal letters."""
 
         # Create patient context for Langfuse faithfulness evaluation
         patient_context = {
+            "patient_name": patient_data.patient_name,
+            "discharge_date": patient_data.discharge_date,
             "conditions": patient_data.conditions,
             "medications": [m.get("name", "") for m in patient_data.medications],
             "lab_results": [f"{l.get('name', '')}: {l.get('value', '')} {l.get('unit', '')}" for l in patient_data.lab_results],
             "chief_complaint": patient_data.chief_complaint
         }
 
-        response = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=2000, patient_context=patient_context)
+        response, trace = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=2000, patient_context=patient_context)
         
         # Parse JSON response
         try:
@@ -711,6 +805,9 @@ Follow the format and style of formal Medicare appeal letters."""
                 "midnight_reason_2": ""
             }
         
+        # Log each component separately to Langfuse
+        self._log_components_to_langfuse(trace, result, patient_context)
+        
         # Fix a/an grammar in patient background
         patient_bg = fix_a_an_grammar(result.get("patient_background", ""))
         
@@ -718,6 +815,7 @@ Follow the format and style of formal Medicare appeal letters."""
             patient_background=patient_bg,
             midnight_reason_1=result.get("midnight_reason_1", ""),
             midnight_reason_2=result.get("midnight_reason_2", ""),
+            closing_summary=result.get("closing_summary", ""),
             generated_at=datetime.now().isoformat(),
             model_used=self.model_id,
             data_sources=data_sources
@@ -752,12 +850,19 @@ Your task is to generate three components for a Medicare inpatient appeal letter
    - End with why inpatient level required: "continuous physician oversight that could not be safely performed in a lower level of care"
 
 3. **MidnightReason2** (Second Midnight): Start with specific treatments. Include:
+   - MUST include "continued hospitalization" or "ongoing inpatient care" phrase
+   - MUST differentiate from Day 1 using progression language (e.g., "continued from Day 1", "progressing", "Day 2 required")
    - Continued IV medications: "continuation of IV Ceftriaxone for [organism]"
    - Pain/symptom management with medication names
    - Required consultations: "Cardiology consultation for elevated troponin and CHF, Nephrology consideration for AKI"
    - PT/OT evaluations with clinical context: "PT/OT evaluations for 3-week progressive weakness and high fall risk"
    - Discharge complexity: "Case Management and Social Work actively engaged in coordinating complex discharge plan due to [specific barriers]"
    - DO NOT end with "which meets 2MN" or similar - the template already includes that text
+
+4. **Closing Summary**: A brief closing paragraph about the patient's current status:
+   - If discharge_date is blank (patient still admitted): Start with "[Patient name] continues to require hospitalization for [primary condition]. Ongoing treatment includes [key treatments]."
+   - If discharge_date is provided (patient discharged): Start with "[Patient name] required continued hospitalization through [discharge date] for [primary condition]. Treatment included [key treatments]."
+   - This paragraph should summarize the clinical justification for the entire hospital stay.
 
 CRITICAL FORMATTING:
 - MidnightReason1 starts with "management of [condition(s)] with inline lab values..."
@@ -792,23 +897,31 @@ Output Format (JSON):
 {
     "patient_background": "...",
     "midnight_reason_1": "...",
-    "midnight_reason_2": "..."
+    "midnight_reason_2": "...",
+    "closing_summary": "..."
 }"""
 
         user_prompt = f"""Generate MidnightReason justifications based on the following patient data:
 
 {formatted_data}
 
-Generate the patient background paragraph, MidnightReason1, and MidnightReason2 as a JSON object.
+Generate the patient background paragraph, MidnightReason1, MidnightReason2, and closing_summary as a JSON object.
 
 CRITICAL FORMATTING RULES:
 - midnight_reason_1 must start with "management of [condition] requiring..." (NOT "The first midnight..." or "due to...")
-- midnight_reason_2 must start with treatment/service list like "IV [medication], continued..." (NOT "The second midnight..." or "due to...")
+- midnight_reason_2 must START with a specific treatment/service list like "[Medication name] continuation, [therapy] evaluation..." (NOT "continued hospitalization..." or "The second midnight..." or "due to...")
+- midnight_reason_2 MUST include "continued hospitalization" or "ongoing inpatient care" phrase LATER in the text (not at the start)
+- midnight_reason_2 MUST include "two-midnight" or "2MN" phrase (e.g., "meeting two-midnight criteria" or "justifying 2MN status")
+- midnight_reason_2 MUST differentiate from Day 1 using progression language (e.g., "continued from Day 1", "progressing", "Day 2 required")
+- Example midnight_reason_2 start: "Methocarbamol and lidocaine patch continuation, physical therapy evaluation, serial laboratory monitoring..." NOT "Continued hospitalization for..."
+- closing_summary must start with "[Patient name in First Last format] continues to require hospitalization..." if discharge_date is blank, OR "[Patient name in First Last format] required continued hospitalization through [discharge date]..." if discharged
+- ALWAYS use "First Last" name format (e.g., "John Smith" not "Smith, John")
 
 FAITHFULNESS - YOU MAY ONLY USE:
 - Conditions from the CONDITIONS list above - do NOT invent or infer additional diagnoses
-- Medications from the MEDICATIONS list above
+- Medications from the MEDICATIONS list above - do NOT mention medications not in the list (e.g., if no steroids in list, do NOT say "steroid therapy")
 - Lab values from the LAB RESULTS list above
+- If a medication class is implied by chief complaint but not in MEDICATIONS list, use hedging: "pain management as clinically indicated" NOT "IV opioids"
 - If a condition is not in the list, do NOT mention it even if it seems clinically related
 
 CLINICAL INFERENCES - LABEL THEM CLEARLY:
@@ -831,13 +944,15 @@ Follow the format and style of formal Medicare appeal letters."""
 
         # Create patient context for Langfuse faithfulness evaluation
         patient_context = {
+            "patient_name": patient_data.patient_name,
+            "discharge_date": patient_data.discharge_date,
             "conditions": patient_data.conditions,
             "medications": [m.get("name", "") for m in patient_data.medications],
             "lab_results": [f"{l.get('name', '')}: {l.get('value', '')} {l.get('unit', '')}" for l in patient_data.lab_results],
             "chief_complaint": patient_data.chief_complaint
         }
 
-        response = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=2000, patient_context=patient_context)
+        response, trace = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=2000, patient_context=patient_context)
         
         # Parse JSON response
         try:
@@ -853,6 +968,9 @@ Follow the format and style of formal Medicare appeal letters."""
                 "midnight_reason_1": "",
                 "midnight_reason_2": ""
             }
+        
+        # Log each component separately to Langfuse
+        self._log_components_to_langfuse(trace, result, patient_context)
         
         # Determine data sources
         data_sources = ["Patient", "Encounter", "Condition"]
@@ -874,6 +992,7 @@ Follow the format and style of formal Medicare appeal letters."""
         self._last_patient_background = patient_bg
         self._last_midnight_reason_1 = result.get('midnight_reason_1', '')
         self._last_midnight_reason_2 = result.get('midnight_reason_2', '')
+        self._last_closing_summary = result.get('closing_summary', '')
         self._last_generation_timestamp = datetime.now().isoformat()
         self._last_validation_result = self._validate_generation(
             generated_text, 
@@ -885,6 +1004,7 @@ Follow the format and style of formal Medicare appeal letters."""
             patient_background=patient_bg,
             midnight_reason_1=result.get("midnight_reason_1", ""),
             midnight_reason_2=result.get("midnight_reason_2", ""),
+            closing_summary=result.get("closing_summary", ""),
             generated_at=datetime.now().isoformat(),
             model_used=self.model_id,
             data_sources=data_sources
