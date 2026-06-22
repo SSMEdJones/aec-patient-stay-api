@@ -730,7 +730,7 @@ async def upload_pdf_for_appeal(
             observation_date=fmt_date(getattr(patient_data, 'observation_date', '')),
             inpatient_date=fmt_date(getattr(patient_data, 'inpatient_date', '')),
             discharge_date=fmt_date(getattr(patient_data, 'discharge_date', '')),
-            reference_number=random_ref_num,
+            reference_number=getattr(patient_data, 'authorization_number', '') or random_ref_num,
             payer_name="Medicare Advantage Plan",
             insurance_name=getattr(patient_data, 'insurance_name', '') or "",
             street_address="PO Box 0000",

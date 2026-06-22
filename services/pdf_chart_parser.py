@@ -149,6 +149,7 @@ class ExtractedChartData:
     original_dob: str = ""
     original_mrn: str = ""
     account_number: str = ""  # Account/encounter number from PDF
+    authorization_number: str = ""  # PrimaryCoverageAuthorizationNumber (e.g., A322224250)
     original_address: str = ""
     original_ssn: str = ""
     original_phone: str = ""
@@ -619,6 +620,7 @@ class PDFChartParser:
     "original_dob": "date of birth (MM/DD/YYYY)",
     "original_mrn": "medical record number",
     "account_number": "account number or encounter number (look for ACCOUNT NO., Account #, Encounter, FIN, Visit Number)",
+    "authorization_number": "PrimaryCoverageAuthorizationNumber - look for 'PrimaryCoverageAuthorizationNumber:' followed by alphanumeric code like 'A322224250'",
     "gender": "M or F",
     "age": 0,
     "admission_date": "first admission/observation date (MM/DD/YYYY)",
@@ -626,7 +628,7 @@ class PDFChartParser:
     "inpatient_date": "date patient transitioned to inpatient status - usually day after observation (MM/DD/YYYY or null if not mentioned)",
     "discharge_date": "date patient was discharged (MM/DD/YYYY) - look for DISCHARGE DATE/TIME field. If no discharge date found or patient is still admitted, use null",
     "place_of_service": "Determine INITIAL point of arrival: If patient 'presents via EMS', 'arrived by ambulance', 'brought by EMS', 'transported by EMS', or mentions '911' → use 'Emergency Department'. If direct admission without ambulance → use 'Hospital'. If outpatient → 'Urgent Care' or 'Clinic'.",
-    "chief_complaint": "Write a 2-paragraph OPENING HOOK (70-90 words total) for an appeal letter. Format: PARAGRAPH 1: 'Your member required acute inpatient level of care beginning [admission_date], for management of [primary diagnosis with complications].' PARAGRAPH 2: '[He/She] has a history of [2-3 most relevant conditions with dates]. [He/She] was admitted from [ED/clinic] for [key presenting symptoms]. Hospital-level care was required due to [1-2 specific reasons].' Do NOT use markdown or asterisks. Be concise - pick only the MOST relevant history.",
+    "chief_complaint": "Write a 2-paragraph OPENING HOOK (80-150 words total) for an appeal letter. PARAGRAPH 1: Start with 'Your member was admitted inpatient due to [primary condition] with [key symptoms], [abnormal findings like elevated WBC, low O2 sat, etc.] requiring hospital-level evaluation, treatment, and monitoring.' PARAGRAPH 2: '[First Last] is a [age] year old [male/female] with a significant medical history of [relevant comorbidities]. [He/She] was [admitted from ED/arrived via EMS/etc] for [presenting complaint]. [Optional: brief surgical history if relevant].' Do NOT use markdown or asterisks. Do NOT fabricate dates for procedures unless explicitly documented. Be concise.",
     "chief_complaint_short": "Brief symptom list only: 'syncope, unresponsiveness'",
     "hpi": "history of present illness summary - VERBATIM from chart (2-4 sentences with timeline and key details)",
     "conditions": ["CHRONIC DISEASES ONLY from PAST MEDICAL HISTORY section. Extract EXACTLY as written. Do NOT include acute symptoms."],
@@ -660,7 +662,7 @@ CRITICAL INSTRUCTIONS:
 - LAB FLAGS: Only mark 'H' or 'L' if explicitly shown next to value. Do NOT infer flags - leave blank if not marked.
 - CONDITIONS: Extract ONLY from PAST MEDICAL HISTORY section, not from narrative or assessment.
 - PLACE OF SERVICE: Determine based on HOW patient arrived, not current unit. If transported by EMS/ambulance → "Emergency Department". If walked in or direct admit → "Hospital". The SERVICE code (MED, SURG, etc.) shows current unit, not arrival point.
-- CHIEF COMPLAINT (HOOK): Write a persuasive 2-paragraph opening for an appeal letter. Paragraph 1 must state inpatient care was required and list the diagnosis with complications. Paragraph 2 must include: relevant medical/surgical history with dates, admission source (ED, clinic, direct admit), and specific presenting symptoms (e.g., 'diarrhea up to 8 times per day', 'severe abdominal pain'). Do NOT use markdown, asterisks, or any special formatting. Output plain text only. Convey why hospital-level care was medically necessary.
+- CHIEF COMPLAINT (HOOK): Write a persuasive 2-paragraph opening for an appeal letter. PARAGRAPH 1 must start with 'Your member was admitted inpatient due to' and end with 'requiring hospital-level evaluation, treatment, and monitoring.' Include key symptoms and abnormal findings. PARAGRAPH 2 must start with '[Patient First Last] is a [age] year old [male/female] with a significant medical history of...' Include relevant comorbidities, how patient arrived (ED, EMS, clinic), and presenting complaint. Do NOT use markdown, asterisks, or any special formatting. Do NOT fabricate procedure dates - only include dates if explicitly documented. Output plain text only.
 - ONLY include information explicitly stated in the chart - do NOT infer or make up findings
 - Do NOT add clinical findings like tachycardia, fever, hypotension unless explicitly documented with values
 - Extract conditions EXACTLY as written in PAST MEDICAL HISTORY
@@ -824,12 +826,22 @@ Return ONLY valid JSON, no other text."""
                 data["place_of_service_raw_code"] = raw_code
                 logger.info(f"Set data['place_of_service'] = '{service_code_pos}' (raw: '{raw_code}')")
         
+        # Fallback regex extraction for authorization number if LLM didn't capture it
+        if not data.get("authorization_number"):
+            auth_match = re.search(r'PrimaryCoverageAuthorizationNumber[:\s]*([A-Z]?\d+)', text, re.IGNORECASE)
+            if auth_match:
+                data["authorization_number"] = auth_match.group(1)
+                logger.info(f"Extracted authorization_number via regex: {data['authorization_number']}")
+        else:
+            logger.info(f"LLM extracted authorization_number: {data.get('authorization_number')}")
+        
         # Convert to dataclass
         extracted = ExtractedChartData(
             original_name=data.get("original_name", ""),
             original_dob=data.get("original_dob", ""),
             original_mrn=data.get("original_mrn", ""),
             account_number=data.get("account_number", ""),
+            authorization_number=data.get("authorization_number", ""),
             gender=data.get("gender", ""),
             age=data.get("age", 0),
             admission_date=data.get("admission_date", ""),
@@ -1018,6 +1030,7 @@ Return ONLY valid JSON, no other text."""
             gender=extracted.gender,
             age=age,
             account_number=extracted.account_number,
+            authorization_number=extracted.authorization_number,
             insurance_name=extracted.insurance_name,
             insurance_id=extracted.insurance_id,
             insurance_group=extracted.insurance_group,

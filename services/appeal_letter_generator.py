@@ -557,13 +557,25 @@ class AppealLetterGenerator:
         random_member_id = f"{random.randint(100000000, 999999999)}"
         random_ref_num = f"A{random.randint(100000000, 999999999)}"
         
+        # Use authorization_number from patient data if available, else fall back to parameter or random
+        effective_ref_num = patient_data.authorization_number or reference_number or random_ref_num
+        # Use insurance_id from patient data if available, else fall back to parameter or random
+        effective_member_id = patient_data.insurance_id or member_id or random_member_id
+        
+        # Log what we're using
+        print(f"[DEBUG] patient_data.authorization_number = '{patient_data.authorization_number}'")
+        print(f"[DEBUG] reference_number param = '{reference_number}'")
+        print(f"[DEBUG] effective_ref_num = '{effective_ref_num}'")
+        print(f"[DEBUG] patient_data.insurance_id = '{patient_data.insurance_id}'")
+        print(f"[DEBUG] effective_member_id = '{effective_member_id}'")
+        
         # Prepare letter data
         letter_data = AppealLetterData(
             member_name=patient_data.patient_name,
             dob=dob_formatted,
             age=str(patient_data.age) if patient_data.age else "",
             gender=gender_display,
-            member_id=member_id or random_member_id,
+            member_id=effective_member_id,
             medical_history=medical_history,
             hook=hook,
             place_of_service=place_of_service or "Hospital",
@@ -571,7 +583,7 @@ class AppealLetterGenerator:
             city=payer.get("city", ""),
             state=payer.get("state", ""),
             zip_code=payer.get("zip", ""),
-            reference_number=reference_number or random_ref_num,
+            reference_number=effective_ref_num,
             dos=dos_formatted,
             patient_background=reason_output.patient_background,
             midnight_reason_1=reason_output.midnight_reason_1,
@@ -677,12 +689,23 @@ class AppealLetterGenerator:
         random_member_id = f"{random.randint(100000000, 999999999)}"
         random_ref_num = f"A{random.randint(100000000, 999999999)}"
         
+        # Use authorization_number from patient data if available, else fall back to parameter or random
+        effective_ref_num = patient_data.authorization_number or reference_number or random_ref_num
+        # Use insurance_id from patient data if available, else fall back to parameter or random
+        effective_member_id = patient_data.insurance_id or member_id or random_member_id
+        
+        # Log what we're using
+        print(f"[DEBUG] patient_data.authorization_number = '{patient_data.authorization_number}'")
+        print(f"[DEBUG] effective_ref_num = '{effective_ref_num}'")
+        print(f"[DEBUG] patient_data.insurance_id = '{patient_data.insurance_id}'")
+        print(f"[DEBUG] effective_member_id = '{effective_member_id}'")
+        
         letter_data = AppealLetterData(
             member_name=patient_data.patient_name,
             dob=dob_formatted,
             age=str(patient_data.age) if patient_data.age else "",
             gender=gender_display,
-            member_id=member_id if member_id else random_member_id,
+            member_id=effective_member_id,
             medical_history=medical_history,
             hook=hook,
             place_of_service=place_of_service or "Hospital",
@@ -690,7 +713,7 @@ class AppealLetterGenerator:
             city=payer.get("city", ""),
             state=payer.get("state", ""),
             zip_code=payer.get("zip", ""),
-            reference_number=reference_number if reference_number else random_ref_num,
+            reference_number=effective_ref_num,
             dos=dos_formatted,
             patient_background=reason_output.patient_background,
             midnight_reason_1=reason_output.midnight_reason_1,

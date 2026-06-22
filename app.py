@@ -778,7 +778,7 @@ async def upload_pdf_for_appeal(
             observation_date=fmt_date(getattr(patient_data, 'observation_date', '')),
             inpatient_date=fmt_date(getattr(patient_data, 'inpatient_date', '')),
             discharge_date=fmt_date(getattr(patient_data, 'discharge_date', '')),
-            reference_number="",  # User enters from denial letter
+            reference_number=getattr(patient_data, 'authorization_number', '') or "",  # From PrimaryCoverageAuthorizationNumber
             payer_name=payer_name,
             insurance_name=getattr(patient_data, 'insurance_name', '') or "",
             street_address=street_address,

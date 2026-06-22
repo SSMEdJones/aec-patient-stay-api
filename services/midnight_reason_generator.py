@@ -81,6 +81,7 @@ class PatientStayData:
     gender: str = ""
     age: int = 0
     account_number: str = ""  # Account/encounter number for output filename
+    authorization_number: str = ""  # PrimaryCoverageAuthorizationNumber from Epic (e.g., A322224250)
     
     # Insurance/Payer info
     insurance_name: str = ""  # Primary insurance/payer name
@@ -693,30 +694,38 @@ Your task is to generate three components for a Medicare inpatient appeal letter
 
 1. **Patient Background Paragraph**: A single paragraph summarizing the patient's demographics, past medical history (using standard abbreviations like HTN, DM, COPD, CHF, etc.), and reason for presenting to the emergency department.
 
-2. **MidnightReason1** (First Midnight): This will be inserted after "The first midnight was medically necessary for" - so start with "management of..." or similar phrasing. Include:
+2. **MidnightReason1** (First Midnight): Generate a COMPLETE paragraph that starts with 'During the first midnight, the patient continued to require inpatient care for [primary condition]'. Include:
    - Primary diagnosis/reason requiring management
-   - Specific medications administered with routes (IV hydromorphone, IV ondansetron, PO methocarbamol, etc.)
-   - Abnormal laboratory findings with specific values (elevated troponin 0.08 ng/mL, etc.)
-   - Imaging findings if available
+   - Specific medications with route prefix for EVERY medication (IV furosemide, PO metoprolol, SC enoxaparin, etc.) - NEVER list a medication without its route
+   - Abnormal laboratory findings with specific values (elevated troponin 0.08 ng/mL, eGFR 48 mL/min, etc.)
+   - Imaging findings or pending cultures if available
    - Monitoring requirements (continuous telemetry, pulse oximetry, etc.)
+   - End with '...and remained unsafe for discharge due to [specific clinical reason].'
 
-3. **MidnightReason2** (Second Midnight): This will be inserted after "The second midnight was medically necessary for" - so start with a list of services/treatments. Include:
-   - MUST include "continued hospitalization" or "ongoing inpatient care" phrase
-   - MUST differentiate from Day 1 using progression language like "continued from Day 1", "progressing", "ongoing", "Day 2 required"
-   - Continued IV medications and adjustments
+3. **MidnightReason2** (Second Midnight): Generate a COMPLETE paragraph that starts with 'During the second midnight, the patient still required hospital-level care due to [condition]'. Include:
+   - Show PROGRESSION from first midnight (continued, persistent, worsening, pending results)
+   - Continued medications with routes (IV antibiotics, PO diuretics, etc.)
+   - Serial labs showing trends if available
    - Therapy evaluations (PT evaluation, OT evaluation)
-   - Consultations (cardiology, wound care, etc.)
+   - Consultations (cardiology, nephrology, etc.)
    - Discharge planning complexity (Case Management, Social Work engagement)
-   - DO NOT end with "which meets 2MN" or similar - the template already includes that text
+   - End with '...and inability to safely transition to a lower level of care because [specific clinical reason].'
 
 4. **Closing Summary**: A brief closing paragraph about the patient's current status:
    - If discharge_date is blank (patient still admitted): Start with "[Patient name] continues to require hospitalization for [primary condition]. Ongoing treatment includes [key treatments]."
    - If discharge_date is provided (patient discharged): Start with "[Patient name] required continued hospitalization through [discharge date] for [primary condition]. Treatment included [key treatments]."
    - This paragraph should summarize the clinical justification for the entire hospital stay.
 
-CRITICAL FORMATTING:
-- MidnightReason1 should start with "management of [condition] requiring..." NOT "The first midnight..." or "due to..."
-- MidnightReason2 should start with specific treatments/services like "IV [medication], continued [treatment], PT evaluation..." NOT "The second midnight..."
+CRITICAL FORMATTING - MANDATORY SENTENCE ENDINGS:
+- MidnightReason1 MUST start with 'During the first midnight, the patient continued to require inpatient care for...'
+- MidnightReason1 FINAL SENTENCE MUST literally end with the words '...and remained unsafe for discharge due to [specific reason].'
+  CORRECT: "...and remained unsafe for discharge due to ongoing hemodynamic instability."
+  WRONG: "...need for continuous respiratory monitoring and inpatient-level bronchodilator therapy."
+  WRONG: Any ending that does not contain the exact phrase "remained unsafe for discharge due to"
+- MidnightReason2 MUST start with 'During the second midnight, the patient still required hospital-level care due to...'
+- MidnightReason2 FINAL SENTENCE MUST literally end with '...and inability to safely transition to a lower level of care because [specific reason].'
+  CORRECT: "...and inability to safely transition to a lower level of care because of persistent oxygen requirements."
+  WRONG: Any ending that does not contain the exact phrase "inability to safely transition to a lower level of care because"
 
 TONE - AVOID SENSATIONALIZED LANGUAGE:
 - Do NOT use dramatic phrases like: "life-threatening", "extreme", "critical", "urgent emergent", "highly unstable", "severe, life-threatening", "extreme hemodynamic stress"
@@ -743,12 +752,12 @@ Output Format (JSON):
 Generate the patient background paragraph, MidnightReason1, and MidnightReason2 as a JSON object.
 
 CRITICAL FORMATTING RULES:
-- midnight_reason_1 must start with "management of [condition] requiring..." (NOT "The first midnight..." or "due to...")
-- midnight_reason_2 must START with a specific treatment/service list like "[Medication name] continuation, [therapy] evaluation..." (NOT "continued hospitalization..." or "The second midnight..." or "due to...")
-- midnight_reason_2 MUST include "continued hospitalization" or "ongoing inpatient care" phrase LATER in the text (not at the start)
-- midnight_reason_2 MUST include "two-midnight" or "2MN" phrase (e.g., "meeting two-midnight criteria" or "justifying 2MN status")
-- midnight_reason_2 MUST differentiate from Day 1 using progression language (e.g., "continued from Day 1", "progressing", "Day 2 required")
-- Example midnight_reason_2 start: "Methocarbamol and lidocaine patch continuation, physical therapy evaluation, serial laboratory monitoring..." NOT "Continued hospitalization for..."
+- midnight_reason_1 MUST start with "During the first midnight, the patient continued to require inpatient care for [condition]..."
+- midnight_reason_1 FINAL SENTENCE MUST end with the exact phrase "...and remained unsafe for discharge due to [specific clinical reason]."
+- midnight_reason_2 MUST start with "During the second midnight, the patient still required hospital-level care due to [condition]..."
+- midnight_reason_2 FINAL SENTENCE MUST end with the exact phrase "...and inability to safely transition to a lower level of care because [specific clinical reason]."
+- midnight_reason_2 should show PROGRESSION from Day 1 (continued, persistent, pending results, worsening/improving)
+- DO NOT end with generic phrases about "need for monitoring" or "inpatient-level therapy" - use the EXACT required endings above
 
 FAITHFULNESS - YOU MAY ONLY USE:
 - Conditions from the CONDITIONS list above - do NOT invent or infer additional diagnoses
@@ -770,7 +779,7 @@ REQUIRED LANGUAGE:
 - Include "medically necessary" somewhere in midnight_reason_1
 - Include "inpatient level of care" or similar somewhere in the output
 
-These will be inserted after "The first/second midnight was medically necessary for" so they must flow grammatically.
+Generate COMPLETE paragraphs - these will be used directly in the appeal letter.
 
 If specific data is not available (like medications or imaging), use clinically reasonable language to indicate what would typically be required for the documented conditions.
 For conditions like pneumonia, assume appropriate IV antibiotics. For pain, assume appropriate analgesia.
@@ -840,33 +849,41 @@ Your task is to generate three components for a Medicare inpatient appeal letter
    - Past medical history using abbreviations (HTN, DM, COPD, CHF, CKD, HLD, CAD, AFib, etc.)
    - Reason for presenting to the ED
 
-2. **MidnightReason1** (First Midnight): This will be inserted after "The first midnight was medically necessary for" - start with "management of...". Include:
+2. **MidnightReason1** (First Midnight): Generate a COMPLETE paragraph that starts with 'During the first midnight, the patient continued to require inpatient care for [condition]'. Include:
    - Primary diagnoses with INLINE lab values: "acute kidney injury (Creatinine 1.47 mg/dL, eGFR 36 mL/min/1.73m²)"
    - Specific pathogen if culture available: "urinary tract infection (Klebsiella pneumoniae)"
    - Lab findings inline: "anemia (Hgb 9.7 g/dL)", "cardiac strain (Troponin I 46 ng/L)"
-   - Specific IV medications with clinical reasoning
+   - Specific medications with route prefix for EVERY medication (IV furosemide, PO metoprolol, SC enoxaparin, etc.) - NEVER list a medication without its route
    - Clinical balancing acts: "required balancing Furosemide for HFpEF while protecting kidneys from AKI"
    - Monitoring: telemetry, serial labs
-   - End with why inpatient level required: "continuous physician oversight that could not be safely performed in a lower level of care"
+   - End with '...and remained unsafe for discharge due to [specific clinical reason].'
 
-3. **MidnightReason2** (Second Midnight): Start with specific treatments. Include:
-   - MUST include "continued hospitalization" or "ongoing inpatient care" phrase
-   - MUST differentiate from Day 1 using progression language (e.g., "continued from Day 1", "progressing", "Day 2 required")
-   - Continued IV medications: "continuation of IV Ceftriaxone for [organism]"
-   - Pain/symptom management with medication names
+3. **MidnightReason2** (Second Midnight): Generate a COMPLETE paragraph that starts with 'During the second midnight, the patient still required hospital-level care due to [condition]'. Include:
+   - Show PROGRESSION from Day 1 (continued, persistent, pending results, worsening/improving)
+   - Continued medications with routes: "continuation of IV Ceftriaxone for [organism]", "PO diuretics"
+   - Serial labs showing trends if available
    - Required consultations: "Cardiology consultation for elevated troponin and CHF, Nephrology consideration for AKI"
    - PT/OT evaluations with clinical context: "PT/OT evaluations for 3-week progressive weakness and high fall risk"
    - Discharge complexity: "Case Management and Social Work actively engaged in coordinating complex discharge plan due to [specific barriers]"
-   - DO NOT end with "which meets 2MN" or similar - the template already includes that text
+   - End with '...and inability to safely transition to a lower level of care because [specific clinical reason].'
 
-4. **Closing Summary**: A brief closing paragraph about the patient's current status:
-   - If discharge_date is blank (patient still admitted): Start with "[Patient name] continues to require hospitalization for [primary condition]. Ongoing treatment includes [key treatments]."
-   - If discharge_date is provided (patient discharged): Start with "[Patient name] required continued hospitalization through [discharge date] for [primary condition]. Treatment included [key treatments]."
-   - This paragraph should summarize the clinical justification for the entire hospital stay.
+4. **Closing Summary**: Generate a COMPLETE closing sentence:
+   - MUST start with "In summary, the patient required continued inpatient hospitalization through the denied period for..."
+   - Include the primary conditions being treated
+   - Include key ongoing treatments (IV antibiotics, pain control, PT/OT, etc.)
+   - MUST end with "...and the inpatient stay should be approved as medically necessary."
+   - Should be 1-2 sentences maximum
 
-CRITICAL FORMATTING:
-- MidnightReason1 starts with "management of [condition(s)] with inline lab values..."
-- MidnightReason2 starts with "continuation of [treatment]..."
+CRITICAL FORMATTING - MANDATORY SENTENCE ENDINGS:
+- MidnightReason1 MUST start with 'During the first midnight, the patient continued to require inpatient care for...'
+- MidnightReason1 FINAL SENTENCE MUST literally end with '...and remained unsafe for discharge due to [specific reason].'
+  CORRECT: "...and remained unsafe for discharge due to ongoing hemodynamic instability."
+  WRONG: "...need for continuous respiratory monitoring and inpatient-level bronchodilator therapy."
+- MidnightReason2 MUST start with 'During the second midnight, the patient still required hospital-level care due to...'
+- MidnightReason2 FINAL SENTENCE MUST literally end with '...and inability to safely transition to a lower level of care because [specific reason].'
+  CORRECT: "...and inability to safely transition to a lower level of care because of persistent oxygen requirements."
+- Closing Summary MUST start with "In summary, the patient required continued inpatient hospitalization through the denied period for..."
+- Closing Summary MUST end with "...and the inpatient stay should be approved as medically necessary."
 - Include specific lab values inline with diagnoses, not just listed separately
 - Reference specific pathogens from cultures when available
 - Explain clinical reasoning for treatment decisions
@@ -908,14 +925,14 @@ Output Format (JSON):
 Generate the patient background paragraph, MidnightReason1, MidnightReason2, and closing_summary as a JSON object.
 
 CRITICAL FORMATTING RULES:
-- midnight_reason_1 must start with "management of [condition] requiring..." (NOT "The first midnight..." or "due to...")
-- midnight_reason_2 must START with a specific treatment/service list like "[Medication name] continuation, [therapy] evaluation..." (NOT "continued hospitalization..." or "The second midnight..." or "due to...")
-- midnight_reason_2 MUST include "continued hospitalization" or "ongoing inpatient care" phrase LATER in the text (not at the start)
-- midnight_reason_2 MUST include "two-midnight" or "2MN" phrase (e.g., "meeting two-midnight criteria" or "justifying 2MN status")
-- midnight_reason_2 MUST differentiate from Day 1 using progression language (e.g., "continued from Day 1", "progressing", "Day 2 required")
-- Example midnight_reason_2 start: "Methocarbamol and lidocaine patch continuation, physical therapy evaluation, serial laboratory monitoring..." NOT "Continued hospitalization for..."
-- closing_summary must start with "[Patient name in First Last format] continues to require hospitalization..." if discharge_date is blank, OR "[Patient name in First Last format] required continued hospitalization through [discharge date]..." if discharged
-- ALWAYS use "First Last" name format (e.g., "John Smith" not "Smith, John")
+- midnight_reason_1 MUST start with "During the first midnight, the patient continued to require inpatient care for [condition]..."
+- midnight_reason_1 FINAL SENTENCE MUST end with the exact phrase "...and remained unsafe for discharge due to [specific clinical reason]."
+- midnight_reason_2 MUST start with "During the second midnight, the patient still required hospital-level care due to [condition]..."
+- midnight_reason_2 FINAL SENTENCE MUST end with the exact phrase "...and inability to safely transition to a lower level of care because [specific clinical reason]."
+- midnight_reason_2 should show PROGRESSION from Day 1 (continued, persistent, pending results, worsening/improving)
+- closing_summary MUST start with "In summary, the patient required continued inpatient hospitalization through the denied period for..."
+- closing_summary MUST end with "...and the inpatient stay should be approved as medically necessary."
+- DO NOT end midnight paragraphs with generic phrases about "need for monitoring" or "inpatient-level therapy" - use the EXACT required endings above
 
 FAITHFULNESS - YOU MAY ONLY USE:
 - Conditions from the CONDITIONS list above - do NOT invent or infer additional diagnoses
@@ -937,7 +954,7 @@ REQUIRED LANGUAGE:
 - Include "medically necessary" somewhere in midnight_reason_1
 - Include "inpatient level of care" or similar somewhere in the output
 
-These will be inserted after "The first/second midnight was medically necessary for" so they must flow grammatically.
+Generate COMPLETE paragraphs - these will be used directly in the appeal letter.
 
 If specific data is not available (like medications or imaging), use clinically reasonable language to indicate what would typically be required for the documented conditions.
 Follow the format and style of formal Medicare appeal letters."""
