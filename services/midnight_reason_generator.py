@@ -537,16 +537,21 @@ class MidnightReasonGenerator:
         
         try:
             # Format patient context as input for evaluators
+            # Limit lists to prevent truncation in Langfuse
             input_data = {}
             if patient_context:
                 input_data = {
                     "patient_name": patient_context.get('patient_name', ''),
                     "discharge_date": patient_context.get('discharge_date', ''),
-                    "conditions": patient_context.get('conditions', []),
-                    "medications": patient_context.get('medications', []),
-                    "lab_results": patient_context.get('lab_results', []),
-                    "chief_complaint": patient_context.get('chief_complaint', '')
+                    "conditions": patient_context.get('conditions', [])[:10],  # Limit to 10
+                    "medications": patient_context.get('medications', [])[:15],  # Limit to 15
+                    "lab_results": patient_context.get('lab_results', [])[:15],  # Limit to 15
+                    "chief_complaint": patient_context.get('chief_complaint', '')[:500],  # Limit chars
+                    "consults": patient_context.get('consults', [])[:5],
+                    "procedures": patient_context.get('procedures', [])[:5]
                 }
+                logger.info(f"Langfuse input_data consults: {input_data.get('consults', [])}")
+                logger.info(f"Langfuse input_data procedures: {input_data.get('procedures', [])}")
             
             # Component definitions: (id, display_name)
             components = [
@@ -655,6 +660,22 @@ class MidnightReasonGenerator:
             lines.append("No medications documented (API may not be enabled)")
         lines.append("")
         
+        lines.append("## CONSULTS")
+        if data.consults:
+            for consult in data.consults:
+                lines.append(f"- {consult}")
+        else:
+            lines.append("No consults documented")
+        lines.append("")
+        
+        lines.append("## PROCEDURES")
+        if data.procedures:
+            for procedure in data.procedures:
+                lines.append(f"- {procedure}")
+        else:
+            lines.append("No procedures documented")
+        lines.append("")
+        
         if data.clinical_notes:
             lines.append("## CLINICAL NOTES")
             for i, note in enumerate(data.clinical_notes, 1):
@@ -694,22 +715,24 @@ Your task is to generate three components for a Medicare inpatient appeal letter
 
 1. **Patient Background Paragraph**: A single paragraph summarizing the patient's demographics, past medical history (using standard abbreviations like HTN, DM, COPD, CHF, etc.), and reason for presenting to the emergency department.
 
-2. **MidnightReason1** (First Midnight): Generate a COMPLETE paragraph that starts with 'During the first midnight, the patient continued to require inpatient care for [primary condition]'. Include:
+2. **MidnightReason1** (First Midnight): Generate content that completes the sentence "During the first midnight, the member continued to require inpatient care for..."
+   - DO NOT start with "During the first midnight" - the template adds this prefix
    - Primary diagnosis/reason requiring management
    - Specific medications with route prefix for EVERY medication (IV furosemide, PO metoprolol, SC enoxaparin, etc.) - NEVER list a medication without its route
    - Abnormal laboratory findings with specific values (elevated troponin 0.08 ng/mL, eGFR 48 mL/min, etc.)
    - Imaging findings or pending cultures if available
    - Monitoring requirements (continuous telemetry, pulse oximetry, etc.)
-   - End with '...and remained unsafe for discharge due to [specific clinical reason].'
+   - MUST end with '...and remained unsafe for discharge due to [specific clinical reason].'
 
-3. **MidnightReason2** (Second Midnight): Generate a COMPLETE paragraph that starts with 'During the second midnight, the patient still required hospital-level care due to [condition]'. Include:
+3. **MidnightReason2** (Second Midnight): Generate content that completes the sentence "During the second midnight, the member still required hospital-level care due to..."
+   - DO NOT start with "During the second midnight" - the template adds this prefix
    - Show PROGRESSION from first midnight (continued, persistent, worsening, pending results)
    - Continued medications with routes (IV antibiotics, PO diuretics, etc.)
    - Serial labs showing trends if available
    - Therapy evaluations (PT evaluation, OT evaluation)
    - Consultations (cardiology, nephrology, etc.)
    - Discharge planning complexity (Case Management, Social Work engagement)
-   - End with '...and inability to safely transition to a lower level of care because [specific clinical reason].'
+   - MUST end with '...and inability to safely transition to a lower level of care because [specific clinical reason].'
 
 4. **Closing Summary**: A brief closing paragraph about the patient's current status:
    - If discharge_date is blank (patient still admitted): Start with "[Patient name] continues to require hospitalization for [primary condition]. Ongoing treatment includes [key treatments]."
@@ -717,12 +740,12 @@ Your task is to generate three components for a Medicare inpatient appeal letter
    - This paragraph should summarize the clinical justification for the entire hospital stay.
 
 CRITICAL FORMATTING - MANDATORY SENTENCE ENDINGS:
-- MidnightReason1 MUST start with 'During the first midnight, the patient continued to require inpatient care for...'
+- MidnightReason1 must NOT start with 'During the first midnight' - the template adds this prefix
 - MidnightReason1 FINAL SENTENCE MUST literally end with the words '...and remained unsafe for discharge due to [specific reason].'
   CORRECT: "...and remained unsafe for discharge due to ongoing hemodynamic instability."
   WRONG: "...need for continuous respiratory monitoring and inpatient-level bronchodilator therapy."
   WRONG: Any ending that does not contain the exact phrase "remained unsafe for discharge due to"
-- MidnightReason2 MUST start with 'During the second midnight, the patient still required hospital-level care due to...'
+- MidnightReason2 must NOT start with 'During the second midnight' - the template adds this prefix
 - MidnightReason2 FINAL SENTENCE MUST literally end with '...and inability to safely transition to a lower level of care because [specific reason].'
   CORRECT: "...and inability to safely transition to a lower level of care because of persistent oxygen requirements."
   WRONG: Any ending that does not contain the exact phrase "inability to safely transition to a lower level of care because"
@@ -752,9 +775,9 @@ Output Format (JSON):
 Generate the patient background paragraph, MidnightReason1, and MidnightReason2 as a JSON object.
 
 CRITICAL FORMATTING RULES:
-- midnight_reason_1 MUST start with "During the first midnight, the patient continued to require inpatient care for [condition]..."
+- midnight_reason_1 must NOT start with "During the first midnight" - the template adds this prefix
 - midnight_reason_1 FINAL SENTENCE MUST end with the exact phrase "...and remained unsafe for discharge due to [specific clinical reason]."
-- midnight_reason_2 MUST start with "During the second midnight, the patient still required hospital-level care due to [condition]..."
+- midnight_reason_2 must NOT start with "During the second midnight" - the template adds this prefix
 - midnight_reason_2 FINAL SENTENCE MUST end with the exact phrase "...and inability to safely transition to a lower level of care because [specific clinical reason]."
 - midnight_reason_2 should show PROGRESSION from Day 1 (continued, persistent, pending results, worsening/improving)
 - DO NOT end with generic phrases about "need for monitoring" or "inpatient-level therapy" - use the EXACT required endings above
@@ -763,6 +786,8 @@ FAITHFULNESS - YOU MAY ONLY USE:
 - Conditions from the CONDITIONS list above - do NOT invent or infer additional diagnoses
 - Medications from the MEDICATIONS list above - do NOT mention medications not in the list (e.g., if no steroids in list, do NOT say "steroid therapy")
 - Lab values from the LAB RESULTS list above
+- Consults from the CONSULTS list above - include specialty recommendations and findings
+- Procedures from the PROCEDURES list above - include completed and planned procedures (e.g., wound debridement, planned amputation)
 - If a medication class is implied by chief complaint but not in MEDICATIONS list, use hedging: "pain management as clinically indicated" NOT "IV opioids"
 - If a condition is not in the list, do NOT mention it even if it seems clinically related
 
@@ -792,7 +817,9 @@ Follow the format and style of formal Medicare appeal letters."""
             "conditions": patient_data.conditions,
             "medications": [m.get("name", "") for m in patient_data.medications],
             "lab_results": [f"{l.get('name', '')}: {l.get('value', '')} {l.get('unit', '')}" for l in patient_data.lab_results],
-            "chief_complaint": patient_data.chief_complaint
+            "chief_complaint": patient_data.chief_complaint,
+            "consults": patient_data.consults,
+            "procedures": patient_data.procedures
         }
 
         response, trace = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=2000, patient_context=patient_context)
@@ -875,11 +902,11 @@ Your task is to generate three components for a Medicare inpatient appeal letter
    - Should be 1-2 sentences maximum
 
 CRITICAL FORMATTING - MANDATORY SENTENCE ENDINGS:
-- MidnightReason1 MUST start with 'During the first midnight, the patient continued to require inpatient care for...'
+- MidnightReason1 must NOT start with 'During the first midnight' - the template adds this prefix
 - MidnightReason1 FINAL SENTENCE MUST literally end with '...and remained unsafe for discharge due to [specific reason].'
   CORRECT: "...and remained unsafe for discharge due to ongoing hemodynamic instability."
   WRONG: "...need for continuous respiratory monitoring and inpatient-level bronchodilator therapy."
-- MidnightReason2 MUST start with 'During the second midnight, the patient still required hospital-level care due to...'
+- MidnightReason2 must NOT start with 'During the second midnight' - the template adds this prefix
 - MidnightReason2 FINAL SENTENCE MUST literally end with '...and inability to safely transition to a lower level of care because [specific reason].'
   CORRECT: "...and inability to safely transition to a lower level of care because of persistent oxygen requirements."
 - Closing Summary MUST start with "In summary, the patient required continued inpatient hospitalization through the denied period for..."
@@ -925,19 +952,22 @@ Output Format (JSON):
 Generate the patient background paragraph, MidnightReason1, MidnightReason2, and closing_summary as a JSON object.
 
 CRITICAL FORMATTING RULES:
-- midnight_reason_1 MUST start with "During the first midnight, the patient continued to require inpatient care for [condition]..."
+- midnight_reason_1 must NOT start with "During the first midnight" - the template adds this prefix
 - midnight_reason_1 FINAL SENTENCE MUST end with the exact phrase "...and remained unsafe for discharge due to [specific clinical reason]."
-- midnight_reason_2 MUST start with "During the second midnight, the patient still required hospital-level care due to [condition]..."
+- midnight_reason_2 must NOT start with "During the second midnight" - the template adds this prefix
 - midnight_reason_2 FINAL SENTENCE MUST end with the exact phrase "...and inability to safely transition to a lower level of care because [specific clinical reason]."
 - midnight_reason_2 should show PROGRESSION from Day 1 (continued, persistent, pending results, worsening/improving)
 - closing_summary MUST start with "In summary, the patient required continued inpatient hospitalization through the denied period for..."
 - closing_summary MUST end with "...and the inpatient stay should be approved as medically necessary."
+- closing_summary SHOULD include: key procedures performed (e.g., wound debridement), abnormal lab values supporting severity (e.g., elevated CRP/ESR for infection), and significant comorbidities that complicate care
 - DO NOT end midnight paragraphs with generic phrases about "need for monitoring" or "inpatient-level therapy" - use the EXACT required endings above
 
 FAITHFULNESS - YOU MAY ONLY USE:
 - Conditions from the CONDITIONS list above - do NOT invent or infer additional diagnoses
 - Medications from the MEDICATIONS list above - do NOT mention medications not in the list (e.g., if no steroids in list, do NOT say "steroid therapy")
 - Lab values from the LAB RESULTS list above
+- Consults from the CONSULTS list above - include specialty recommendations and findings
+- Procedures from the PROCEDURES list above - include completed and planned procedures (e.g., wound debridement, planned amputation)
 - If a medication class is implied by chief complaint but not in MEDICATIONS list, use hedging: "pain management as clinically indicated" NOT "IV opioids"
 - If a condition is not in the list, do NOT mention it even if it seems clinically related
 
@@ -966,7 +996,9 @@ Follow the format and style of formal Medicare appeal letters."""
             "conditions": patient_data.conditions,
             "medications": [m.get("name", "") for m in patient_data.medications],
             "lab_results": [f"{l.get('name', '')}: {l.get('value', '')} {l.get('unit', '')}" for l in patient_data.lab_results],
-            "chief_complaint": patient_data.chief_complaint
+            "chief_complaint": patient_data.chief_complaint,
+            "consults": patient_data.consults,
+            "procedures": patient_data.procedures
         }
 
         response, trace = self._call_llm(system_prompt, user_prompt, temperature=0.3, max_tokens=2000, patient_context=patient_context)

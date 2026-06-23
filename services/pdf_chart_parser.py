@@ -173,6 +173,8 @@ class ExtractedChartData:
     vitals: Dict = field(default_factory=dict)
     assessment_plan: str = ""
     clinical_notes: List[str] = field(default_factory=list)
+    consults: List[str] = field(default_factory=list)  # Consult services and findings
+    procedures: List[str] = field(default_factory=list)  # Planned or completed procedures
     
     # Insurance/Payer info
     insurance_name: str = ""  # Primary insurance/payer name
@@ -252,7 +254,46 @@ class PDFChartParser:
             for page in pdf.pages:
                 text = page.extract_text() or ""
                 full_text += text + "\n\n"
+        
+        # Filter out any embedded appeal letter content to prevent LLM from copying it
+        full_text = self._filter_appeal_letter_content(full_text)
         return full_text
+    
+    def _filter_appeal_letter_content(self, text: str) -> str:
+        """Remove any embedded appeal letter content from PDF text.
+        
+        This prevents the LLM from reading and copying previously generated
+        appeal letters that may contain hallucinations.
+        """
+        import re
+        
+        # Pattern 1: Remove entire appeal letter section (MEDICARE APPEAL to Physician Advisor)
+        text = re.sub(
+            r'MEDICARE APPEAL LETTER.*?Physician Advisor',
+            '[APPEAL LETTER REMOVED]',
+            text,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # Pattern 2: Remove "To Whom It May Concern" through "Respectfully submitted"
+        text = re.sub(
+            r'To Whom It May Concern.*?Respectfully submitted',
+            '[APPEAL CONTENT REMOVED]',
+            text,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # Pattern 3: Remove isolated appeal letter phrases that might remain
+        appeal_phrases = [
+            r'During the first midnight[^.]*\.',
+            r'During the second midnight[^.]*\.',
+            r'Your member was admitted inpatient due to[^.]*\.',
+            r'In summary, the patient required continued inpatient hospitalization[^.]*\.',
+        ]
+        for phrase in appeal_phrases:
+            text = re.sub(phrase, '', text, flags=re.IGNORECASE)
+        
+        return text
     
     def _extract_service_code(self, text: str) -> str:
         """
@@ -628,7 +669,7 @@ class PDFChartParser:
     "inpatient_date": "date patient transitioned to inpatient status - usually day after observation (MM/DD/YYYY or null if not mentioned)",
     "discharge_date": "date patient was discharged (MM/DD/YYYY) - look for DISCHARGE DATE/TIME field. If no discharge date found or patient is still admitted, use null",
     "place_of_service": "Determine INITIAL point of arrival: If patient 'presents via EMS', 'arrived by ambulance', 'brought by EMS', 'transported by EMS', or mentions '911' → use 'Emergency Department'. If direct admission without ambulance → use 'Hospital'. If outpatient → 'Urgent Care' or 'Clinic'.",
-    "chief_complaint": "Write a 2-paragraph OPENING HOOK (80-150 words total) for an appeal letter. PARAGRAPH 1: Start with 'Your member was admitted inpatient due to [primary condition] with [key symptoms], [abnormal findings like elevated WBC, low O2 sat, etc.] requiring hospital-level evaluation, treatment, and monitoring.' PARAGRAPH 2: '[First Last] is a [age] year old [male/female] with a significant medical history of [relevant comorbidities]. [He/She] was [admitted from ED/arrived via EMS/etc] for [presenting complaint]. [Optional: brief surgical history if relevant].' Do NOT use markdown or asterisks. Do NOT fabricate dates for procedures unless explicitly documented. Be concise.",
+    "chief_complaint": "Write a SINGLE PARAGRAPH opening hook (40-80 words) for an appeal letter. Format: '[primary condition/diagnosis] with [key symptoms], [abnormal lab findings like elevated WBC, low hemoglobin, elevated troponin, etc.] requiring hospital-level evaluation, treatment, and monitoring.' This will be inserted after 'Your member was admitted inpatient due to' so do NOT start with those words. Include 2-4 key symptoms and 2-4 relevant abnormal lab values when available. Do NOT include patient demographics, age, or medical history. Do NOT use markdown or asterisks. Be concise and factual.",
     "chief_complaint_short": "Brief symptom list only: 'syncope, unresponsiveness'",
     "hpi": "history of present illness summary - VERBATIM from chart (2-4 sentences with timeline and key details)",
     "conditions": ["CHRONIC DISEASES ONLY from PAST MEDICAL HISTORY section. Extract EXACTLY as written. Do NOT include acute symptoms."],
@@ -653,7 +694,9 @@ class PDFChartParser:
     "insurance_state": "payer state abbreviation (2 letters)",
     "insurance_zip": "payer zip code",
     "facility_name": "hospital name",
-    "attending_physician": "doctor name"
+    "attending_physician": "doctor name",
+    "consults": ["List of specialty consults with key findings. Format: 'Vascular Surgery - recommended BKA due to nonhealing ulcer', 'Podiatry - wound care evaluation', 'Cardiology - cleared for surgery'. Include specialty name AND their recommendation/finding."],
+    "procedures": ["List of completed or planned procedures. Format: 'OR scheduled for right below-knee amputation', 'Bedside wound debridement performed', 'Pending MRI brain'. Include status (completed, pending, scheduled) when available."]
 }}
 
 CRITICAL INSTRUCTIONS:
@@ -662,7 +705,23 @@ CRITICAL INSTRUCTIONS:
 - LAB FLAGS: Only mark 'H' or 'L' if explicitly shown next to value. Do NOT infer flags - leave blank if not marked.
 - CONDITIONS: Extract ONLY from PAST MEDICAL HISTORY section, not from narrative or assessment.
 - PLACE OF SERVICE: Determine based on HOW patient arrived, not current unit. If transported by EMS/ambulance → "Emergency Department". If walked in or direct admit → "Hospital". The SERVICE code (MED, SURG, etc.) shows current unit, not arrival point.
-- CHIEF COMPLAINT (HOOK): Write a persuasive 2-paragraph opening for an appeal letter. PARAGRAPH 1 must start with 'Your member was admitted inpatient due to' and end with 'requiring hospital-level evaluation, treatment, and monitoring.' Include key symptoms and abnormal findings. PARAGRAPH 2 must start with '[Patient First Last] is a [age] year old [male/female] with a significant medical history of...' Include relevant comorbidities, how patient arrived (ED, EMS, clinic), and presenting complaint. Do NOT use markdown, asterisks, or any special formatting. Do NOT fabricate procedure dates - only include dates if explicitly documented. Output plain text only.
+- CHIEF COMPLAINT (HOOK): Write EXACTLY 2 paragraphs for an appeal letter opening.
+  HOOK FORMAT (SINGLE PARAGRAPH):
+  - Write a SINGLE paragraph that will follow "Your member was admitted inpatient due to"
+  - Do NOT start with "Your member was admitted" - that's added by the template
+  - Include: [primary condition] with [key symptoms], [abnormal lab findings] requiring hospital-level evaluation, treatment, and monitoring.
+  - Example: "acute COPD exacerbation with shortness of breath, intermittent dizziness, and generalized weakness requiring hospital-level evaluation, treatment, and monitoring."
+  - Include 2-4 key symptoms and 2-4 relevant abnormal lab values when documented
+  - Do NOT include patient demographics, age, gender, or medical history in this field
+  - Do NOT use markdown, asterisks, or any special formatting. Output plain text only.
+  
+  HOOK FAITHFULNESS RULES:
+  - ONLY include symptoms, findings, and treatments EXPLICITLY documented in the chart text
+  - Do NOT say "failed antibiotics" or "failed outpatient treatment" unless explicitly stated - if patient denies recent antibiotics, do NOT claim they failed
+  - Do NOT invent wound descriptions (drainage, exposed tissue, etc.) unless EXACTLY quoted in the chart
+  - Do NOT mention treatments (wound vac, PICC line, etc.) unless documented
+  - Lab values can be cited but do NOT claim they are "elevated" unless flagged as High (H) or explicitly stated as abnormal
+  - If clinical details are sparse, keep the hook brief rather than inventing severity indicators
 - ONLY include information explicitly stated in the chart - do NOT infer or make up findings
 - Do NOT add clinical findings like tachycardia, fever, hypotension unless explicitly documented with values
 - Extract conditions EXACTLY as written in PAST MEDICAL HISTORY
@@ -835,6 +894,12 @@ Return ONLY valid JSON, no other text."""
         else:
             logger.info(f"LLM extracted authorization_number: {data.get('authorization_number')}")
         
+        # Log consults/procedures extraction
+        consults = data.get("consults", [])
+        procedures = data.get("procedures", [])
+        logger.info(f"LLM extracted consults ({len(consults)}): {consults}")
+        logger.info(f"LLM extracted procedures ({len(procedures)}): {procedures}")
+        
         # Convert to dataclass
         extracted = ExtractedChartData(
             original_name=data.get("original_name", ""),
@@ -857,6 +922,8 @@ Return ONLY valid JSON, no other text."""
             medications=data.get("medications", []),
             lab_results=data.get("lab_results", []),
             vitals=data.get("vitals", {}),
+            consults=data.get("consults", []),
+            procedures=data.get("procedures", []),
             insurance_name=data.get("insurance_name", ""),
             insurance_id=data.get("insurance_id", ""),
             insurance_group=data.get("insurance_group", ""),
@@ -1065,7 +1132,9 @@ Return ONLY valid JSON, no other text."""
                 }
                 for lab in extracted.lab_results
             ],
-            clinical_notes=[extracted.hpi] if extracted.hpi else []
+            clinical_notes=[extracted.hpi] if extracted.hpi else [],
+            consults=extracted.consults,
+            procedures=extracted.procedures
         )
         
         return patient_data
@@ -1169,9 +1238,11 @@ Return ONLY valid JSON, no other text."""
             raw_chief_complaint = self._extract_raw_chief_complaint(source_text) if source_text else ""
             
             # Input context for evaluator - use RAW source text, not synthesized hook
+            # Include labs so evaluator can verify lab values cited in hook
             input_data = {
                 "raw_chief_complaint": raw_chief_complaint,  # Source text from PDF
-                "conditions": patient_data.conditions[:5]
+                "conditions": patient_data.conditions[:5],
+                "lab_results": patient_data.lab_results[:20]  # Include labs for faithfulness check
             }
             
             # Create a trace for hook evaluation
