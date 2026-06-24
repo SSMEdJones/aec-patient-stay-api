@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Extraction Debug - Langfuse Verification</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23dc2626'%3E%3Cpath d='M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z'/%3E%3C/svg%3E">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23059669'%3E%3Cpath fill-rule='evenodd' d='M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z' clip-rule='evenodd'/%3E%3C/svg%3E">
     <style>
         :root {
             --primary-color: #2563eb;
@@ -39,7 +39,7 @@
         }
         
         header {
-            background: linear-gradient(135deg, #dc2626, #b91c1c);
+            background: linear-gradient(135deg, #059669, #047857);
             color: white;
             padding: 1.5rem 2rem;
             margin-bottom: 1.5rem;
@@ -64,7 +64,7 @@
         .header-logo svg {
             width: 32px;
             height: 32px;
-            color: var(--error-color);
+            color: var(--success-color);
         }
         
         .header-text {
@@ -493,7 +493,7 @@
         <header>
             <div class="header-logo">
                 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+                    <path fill-rule="evenodd" d="M2.25 12c0-5.385 4.365-9.75 9.75-9.75s9.75 4.365 9.75 9.75-4.365 9.75-9.75 9.75S2.25 17.385 2.25 12zm13.36-1.814a.75.75 0 10-1.22-.872l-3.236 4.53L9.53 12.22a.75.75 0 00-1.06 1.06l2.25 2.25a.75.75 0 001.14-.094l3.75-5.25z" clip-rule="evenodd" />
                 </svg>
             </div>
             <div class="header-text">
@@ -1232,7 +1232,7 @@
                 'uti': ['urinary tract infection', 'uti'],
             };
             
-            // Boilerplate appeal letter phrases to ignore (not clinical terms)
+            // Boilerplate appeal letter phrases and JSON field names to ignore
             const boilerplateIgnore = [
                 'medically necessary', 'could not be safely performed',
                 'lower level of care', 'continuous physician oversight',
@@ -1241,7 +1241,14 @@
                 'score:', 'overall:', 'completeness:', 'faithfulness:',
                 'process', 'valid, timely', 'expedited', 'reconsideration',
                 'serious jeopardize', 'reasonable extension', 'clinically reasonable',
-                'not fabricated', 'high', 'average'
+                'not fabricated', 'high', 'average',
+                // JSON field names from Langfuse evaluator output
+                'medications_evidence', 'conditions_evidence', 'lab_values_evidence',
+                'medications_validated', 'conditions_validated', 'lab_results_validated',
+                'medications_flagged', 'conditions_flagged', 'lab_results_flagged',
+                'source_evidence', 'patient_demographics', 'input_data', 'output_data',
+                'raw_chief_complaint', 'chief_complaint', 'lab_results', 'conditions',
+                'empty list', 'empty array', '[]'
             ];
             
             let disputedTerms = [];
@@ -1254,12 +1261,26 @@
                 feedbackLower.includes('not explicitly stated') ||
                 feedbackLower.includes('not in input') ||
                 feedbackLower.includes('hallucinated') ||
-                feedbackLower.includes('fabricated');
+                feedbackLower.includes('hallucinations') ||
+                feedbackLower.includes('fabricated') ||
+                feedbackLower.includes('not verifiable') ||
+                feedbackLower.includes('not performed') ||
+                feedbackLower.includes('only ordered') ||
+                feedbackLower.includes('not present') ||
+                feedbackLower.includes('different values') ||
+                feedbackLower.includes('completely different') ||
+                feedbackLower.includes('significantly wrong') ||
+                feedbackLower.includes('mixed from different') ||
+                feedbackLower.includes('wrong/hallucinated') ||
+                feedbackLower.includes('lab values are');
             
             if (hasFaithfulnessConcern) {
                 // Split feedback into sentences and find ones with concerns
-                const sentences = feedback.split(/[.!?]+/);
-                const concernWords = ['faithfulness', 'not explicitly', 'not in input', 'inferred', 'hallucinated', 'fabricated'];
+                const sentences = feedback.split(/[.!?;]+/);
+                const concernWords = ['faithfulness', 'not explicitly', 'not in input', 'inferred', 
+                    'hallucinated', 'hallucinations', 'fabricated', 'not verifiable', 'not performed',
+                    'only ordered', 'not present', 'unverifiable', 'different values', 'completely different',
+                    'significantly wrong', 'mixed from different', 'wrong values'];
                 
                 sentences.forEach(sentence => {
                     const sentenceLower = sentence.toLowerCase();
@@ -1296,6 +1317,67 @@
                         }
                     });
                 });
+                
+                // Method 1b: Extract terms from parenthetical groups containing quotes
+                // e.g., ("looked ok", "normal myocardial perfusion scan")
+                const parenWithQuotes = feedback.match(/\(["'][^)]+["']\)/g) || [];
+                parenWithQuotes.forEach(match => {
+                    const inner = match.slice(1, -1); // Remove outer parens
+                    const quotedTerms = inner.match(/["']([^"']+)["']/g) || [];
+                    quotedTerms.forEach(q => {
+                        const term = q.slice(1, -1).trim();
+                        const isBoilerplate = boilerplateIgnore.some(bp => 
+                            term.toLowerCase().includes(bp.toLowerCase())
+                        );
+                        if (!isBoilerplate && term.length > 2) {
+                            disputedTerms.push(term);
+                        }
+                    });
+                });
+                
+                // Method 1c: Extract terms before concern phrases
+                // e.g., "the nuclear stress test was only 'ordered'"
+                const beforeConcern = feedback.match(/(?:the\s+)?([A-Za-z][A-Za-z\s]{3,40})(?:\s+was\s+only|\s+not\s+performed|\s+only\s+ordered|\s+are\s+not\s+verifiable)/gi) || [];
+                beforeConcern.forEach(match => {
+                    // Extract the captured group (the procedure/test name)
+                    const term = match.replace(/\s*(was only|not performed|only ordered|are not verifiable).*/i, '').replace(/^the\s+/i, '').trim();
+                    const isBoilerplate = boilerplateIgnore.some(bp => 
+                        term.toLowerCase().includes(bp.toLowerCase())
+                    );
+                    if (!isBoilerplate && term.length > 3 && term.length < 50) {
+                        disputedTerms.push(term);
+                    }
+                });
+                
+                // Method 1d: Extract lab values in format "LAB=VALUE" from parenthetical groups
+                // e.g., "(WBC=8.2, HGB=9.3, HCT=32.6, PLT=285)"
+                const labValuePattern = /\b([A-Z]{2,12})\s*[=:]\s*([\d.]+)/gi;
+                let labMatch;
+                while ((labMatch = labValuePattern.exec(feedback)) !== null) {
+                    const labName = labMatch[1].toUpperCase();
+                    const labValue = labMatch[2];
+                    // Store both the lab name and value for searching
+                    disputedValues.push(labValue);
+                    // Also store common lab name variations
+                    const labNameMap = {
+                        'WBC': 'wbc',
+                        'HGB': 'hemoglobin',
+                        'HCT': 'hematocrit', 
+                        'PLT': 'platelet',
+                        'SODIUM': 'sodium',
+                        'POTASSIUM': 'potassium',
+                        'CHLORIDE': 'chloride',
+                        'CO2': 'co2',
+                        'BUN': 'bun',
+                        'CREATININE': 'creatinine',
+                        'GLUCOSE': 'glucose',
+                        'CALCIUM': 'calcium',
+                        'EGFR': 'egfr'
+                    };
+                    if (labNameMap[labName]) {
+                        disputedTerms.push(labNameMap[labName]);
+                    }
+                }
             }
             
             // Method 2: Split by ✓ and ✗ markers (original method)

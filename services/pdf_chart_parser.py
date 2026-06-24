@@ -256,7 +256,11 @@ class PDFChartParser:
                 full_text += text + "\n\n"
         
         # Filter out any embedded appeal letter content to prevent LLM from copying it
+        original_len = len(full_text)
         full_text = self._filter_appeal_letter_content(full_text)
+        filtered_len = len(full_text)
+        if original_len != filtered_len:
+            logger.info(f"Appeal letter filter removed {original_len - filtered_len} chars")
         return full_text
     
     def _filter_appeal_letter_content(self, text: str) -> str:
@@ -264,6 +268,8 @@ class PDFChartParser:
         
         This prevents the LLM from reading and copying previously generated
         appeal letters that may contain hallucinations.
+        
+        Handles both normal text and concatenated/no-space text from PDF extraction.
         """
         import re
         
@@ -283,12 +289,51 @@ class PDFChartParser:
             flags=re.DOTALL | re.IGNORECASE
         )
         
-        # Pattern 3: Remove isolated appeal letter phrases that might remain
+        # Pattern 3: Remove Fast Appeal / Formal Request sections (with or without spaces)
+        # These appear when a prior appeal letter is embedded in the PDF
+        text = re.sub(
+            r'Formal\s*Request\s*for\s*Fast\s*Appeal.*?(?:Physician\s*Advisor|Respectfully\s*submitted|SSM\s*Health)',
+            '[FAST APPEAL REMOVED]',
+            text,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # Pattern 4: Remove concatenated appeal headers (no spaces from PDF extraction)
+        text = re.sub(
+            r'FormalRequestforFastAppeal.*?(?:PhysicianAdvisor|Respectfullysubmitted|SSMHealth)',
+            '[FAST APPEAL REMOVED]',
+            text,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # Pattern 5: Remove "Request for Reconsideration" sections
+        text = re.sub(
+            r'Request\s*for\s*Reconsideration.*?(?:Physician\s*Advisor|Respectfully|Sincerely)',
+            '[RECONSIDERATION REMOVED]',
+            text,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # Pattern 6: FALLBACK - If "Fast Appeal" still exists (end markers not found),
+        # remove next 10000 chars (typical appeal letter length)
+        if re.search(r'Fast\s*Appeal|FastAppeal', text, re.IGNORECASE):
+            text = re.sub(
+                r'(Fast\s*Appeal|FastAppeal).{0,10000}',
+                '[APPEAL CONTENT REMOVED]',
+                text,
+                flags=re.DOTALL | re.IGNORECASE
+            )
+            logger.warning("Used fallback appeal filter (no end marker found)")
+        
+        # Pattern 7: Remove isolated appeal letter phrases that might remain
         appeal_phrases = [
             r'During the first midnight[^.]*\.',
             r'During the second midnight[^.]*\.',
             r'Your member was admitted inpatient due to[^.]*\.',
             r'In summary, the patient required continued inpatient hospitalization[^.]*\.',
+            r'Duringthefirstmidnight[^.]*\.',  # No-space version
+            r'Duringthesecondmidnight[^.]*\.',  # No-space version
+            r'Yourmemberwasadmittedinpatientdueto[^.]*\.',  # No-space version
         ]
         for phrase in appeal_phrases:
             text = re.sub(phrase, '', text, flags=re.IGNORECASE)
@@ -456,11 +501,56 @@ class PDFChartParser:
         # Check medications
         for med in extracted_data.get("medications", []):
             med_name = med.get("name", "").lower() if isinstance(med, dict) else str(med).lower()
+            med_freq = med.get("frequency", "").lower() if isinstance(med, dict) else ""
+            
             # Check first word of medication name (generic name)
             first_word = med_name.split()[0] if med_name.split() else ""
+            name_found = False
             if first_word and len(first_word) > 3 and first_word in source_lower:
-                results["medications_validated"].append(med)
+                name_found = True
             elif med_name in source_lower:
+                name_found = True
+            
+            if name_found:
+                # Also validate frequency if provided - flag if frequency is fabricated
+                if med_freq and med_freq.lower() not in ["", "prn", "as needed", "once", "daily"]:
+                    # Check if this exact frequency appears near medication name (within 150 chars)
+                    escaped_name = re.escape(first_word if first_word else med_name)
+                    
+                    # Get context around medication name
+                    name_match = re.search(escaped_name, source_lower, re.IGNORECASE)
+                    if name_match:
+                        start = max(0, name_match.start() - 75)
+                        end = min(len(source_lower), name_match.end() + 150)
+                        context = source_lower[start:end]
+                        
+                        # Check if extracted frequency appears in context
+                        freq_in_context = med_freq.lower() in context
+                        
+                        # Also check if PRN appears (would contradict a fixed schedule)
+                        prn_in_context = "prn" in context or "as needed" in context or "q6h" in context
+                        
+                        # Check for frequency contradictions
+                        tid_in_context = "tid" in context or "three times" in context
+                        bid_in_context = "bid" in context or "twice" in context
+                        
+                        if prn_in_context and med_freq.lower() in ["bid", "tid", "qid", "4x/day", "twice daily", "three times"]:
+                            # Medication is PRN but we extracted a fixed schedule - flag it
+                            logger.warning(f"Medication appears to be PRN but extracted as {med_freq}: {med_name}")
+                            med["frequency_flagged"] = True
+                        elif tid_in_context and med_freq.lower() in ["4x/day", "qid", "four times"]:
+                            # Source says TID but we extracted 4X/day - wrong
+                            logger.warning(f"Medication frequency mismatch: source says TID but extracted {med_freq}: {med_name}")
+                            med["frequency_flagged"] = True
+                        elif bid_in_context and med_freq.lower() in ["tid", "qid", "4x/day", "three times", "four times"]:
+                            # Source says BID but we extracted more frequent - wrong
+                            logger.warning(f"Medication frequency mismatch: source says BID but extracted {med_freq}: {med_name}")
+                            med["frequency_flagged"] = True
+                        elif not freq_in_context:
+                            # Frequency not found near medication - flag it
+                            logger.warning(f"Medication frequency may be wrong: {med_name} '{med_freq}' not found near medication in source")
+                            med["frequency_flagged"] = True
+                
                 results["medications_validated"].append(med)
             else:
                 results["medications_flagged"].append(med)
@@ -473,13 +563,35 @@ class PDFChartParser:
         for lab in extracted_data.get("lab_results", []):
             lab_name = lab.get("name", "").lower() if isinstance(lab, dict) else ""
             lab_value = str(lab.get("value", "")) if isinstance(lab, dict) else ""
+            lab_date = str(lab.get("date", "")) if isinstance(lab, dict) else ""
             
-            logger.debug(f"Checking lab: name='{lab_name}', value='{lab_value}'")
+            logger.debug(f"Checking lab: name='{lab_name}', value='{lab_value}', date='{lab_date}'")
             
             # Skip empty values
             if not lab_value or lab_value.lower() in ["", "none", "n/a", "pending"]:
                 logger.debug(f"Skipping lab '{lab_name}' - empty or pending value")
                 continue
+            
+            # FIRST: Validate the date if provided - fabricated dates are a red flag
+            date_valid = True
+            if lab_date:
+                # Check if this exact date appears in source (check multiple formats)
+                date_found = False
+                # Try exact match
+                if lab_date.lower() in source_lower:
+                    date_found = True
+                else:
+                    # Try without leading zeros (06/15/26 -> 6/15/26)
+                    alt_date = lab_date.replace("/0", "/").lstrip("0")
+                    if alt_date in source_lower:
+                        date_found = True
+                
+                if not date_found:
+                    logger.warning(f"Lab date NOT in source: {lab_date} for {lab_name}={lab_value} - likely fabricated")
+                    date_valid = False
+                    results["lab_results_flagged"].append(lab)
+                    results["details"].append(f"Lab date fabricated: {lab_date} not in source")
+                    continue  # Skip this lab entirely
             
             # For numeric values, be STRICT - require name and value to appear together
             # This prevents "4.5" in "take 4.5mg metformin" from validating a fabricated lab
@@ -559,6 +671,59 @@ class PDFChartParser:
         else:
             results["faithfulness_score"] = 1.0  # No items to validate
         
+        # Validate chief complaint - check for fabricated clinical phrases
+        chief_complaint = extracted_data.get("chief_complaint", "")
+        hallucinated_phrases = []
+        
+        # List of specific clinical phrases that must appear in source if mentioned
+        # These are high-risk fabrications that would be embarrassing if wrong
+        clinical_phrases_to_check = [
+            # Respiratory issues - often fabricated
+            "respiratory failure", "hypoxic respiratory", "acute hypoxic",
+            "respiratory distress", "hypoxia", "hypoxemia", "desaturation",
+            # Sedation/overdose fabrications
+            "over-sedation", "oversedation", "medication-induced", "drug-induced",
+            "became sedated", "over sedated", "excessive sedation",
+            # IV medications - frequently invented
+            "iv ativan", "iv morphine", "iv lorazepam", "iv dilaudid", "iv fentanyl",
+            "iv hydromorphone", "iv versed", "iv midazolam",
+            # Oxygen specifics
+            "2l oxygen", "3l oxygen", "4l oxygen", "5l oxygen", "6l oxygen",
+            "oxygen support", "nasal cannula", "high flow",
+            # Severe events
+            "septic shock", "cardiogenic shock", "hemorrhagic shock",
+            "cardiac arrest", "respiratory arrest", "code blue",
+            "intubated", "ventilator", "bipap", "cpap",
+            # Common dramatic additions
+            "unresponsive", "altered mental status", "ams", "encephalopathy",
+            "icu admission", "transferred to icu", "critical care",
+        ]
+        
+        chief_lower = chief_complaint.lower()
+        for phrase in clinical_phrases_to_check:
+            if phrase in chief_lower:
+                if phrase not in source_lower:
+                    hallucinated_phrases.append(phrase)
+        
+        if hallucinated_phrases:
+            results["chief_complaint_hallucinations"] = hallucinated_phrases
+            results["details"].append(f"Chief complaint contains fabricated phrases: {hallucinated_phrases}")
+            logger.warning(f"Chief complaint may contain hallucinated phrases: {hallucinated_phrases}")
+        
+        # Also check HPI for hallucinated phrases
+        hpi = extracted_data.get("hpi", "")
+        hpi_hallucinations = []
+        hpi_lower = hpi.lower()
+        for phrase in clinical_phrases_to_check:
+            if phrase in hpi_lower:
+                if phrase not in source_lower:
+                    hpi_hallucinations.append(phrase)
+        
+        if hpi_hallucinations:
+            results["hpi_hallucinations"] = hpi_hallucinations
+            results["details"].append(f"HPI contains fabricated phrases: {hpi_hallucinations}")
+            logger.warning(f"HPI may contain hallucinated phrases: {hpi_hallucinations}")
+        
         return results
     
     def _build_langfuse_excerpts(self, extracted_data: dict, source_text: str, max_chars: int = 50000) -> dict:
@@ -574,6 +739,7 @@ class PDFChartParser:
         source_lower = source_text.lower()
         excerpts = {
             "patient_demographics": "",
+            "hpi_evidence": "",
             "conditions_evidence": [],
             "medications_evidence": [],
             "lab_values_evidence": [],
@@ -587,7 +753,36 @@ class PDFChartParser:
         excerpts["patient_demographics"] = source_text[:1000]
         used_chars += 1000
         
-        # 2. Find evidence for each extracted condition
+        # 2. Extract HPI / Chief Complaint section for evaluator to verify synthesized hook
+        hpi_markers = ["history of present illness", "hpi:", "chief complaint:", "reason for visit:", 
+                       "presenting complaint", "cc:", "history of presenting illness"]
+        hpi_end_markers = ["past medical history", "pmh:", "review of systems", "ros:", 
+                           "physical exam", "medications", "allergies", "social history"]
+        
+        hpi_start = -1
+        for marker in hpi_markers:
+            idx = source_lower.find(marker)
+            if idx >= 0:
+                hpi_start = idx
+                break
+        
+        if hpi_start >= 0:
+            # Find where HPI ends (next section)
+            hpi_end = len(source_text)
+            for end_marker in hpi_end_markers:
+                end_idx = source_lower.find(end_marker, hpi_start + 100)
+                if end_idx > hpi_start and end_idx < hpi_end:
+                    hpi_end = end_idx
+            
+            # Cap HPI excerpt at 5000 chars to leave room for other evidence
+            hpi_excerpt = source_text[hpi_start:min(hpi_end, hpi_start + 5000)].strip()
+            excerpts["hpi_evidence"] = hpi_excerpt
+            used_chars += len(hpi_excerpt)
+            logger.info(f"HPI excerpt: {len(hpi_excerpt)} chars extracted")
+        else:
+            logger.info("No HPI section found in PDF")
+        
+        # 3. Find evidence for each extracted condition
         for condition in extracted_data.get("conditions", [])[:30]:  # Top 30 conditions (increased from 15)
             if used_chars >= max_chars:
                 break
@@ -603,23 +798,42 @@ class PDFChartParser:
                     excerpts["conditions_evidence"].append(f"...{excerpt}...")
                     used_chars += len(excerpt) + 10
         
-        # 3. Find evidence for each medication
+        # 4. Find evidence for each medication (with flexible matching)
+        meds_found = 0
+        meds_not_found = []
         for med in extracted_data.get("medications", [])[:25]:  # Top 25 meds (increased from 12)
             if used_chars >= max_chars:
                 break
             med_name = med.get("name", "").lower() if isinstance(med, dict) else ""
             if not med_name or len(med_name) < 3:
                 continue
+            
+            # Try exact match first
             idx = source_lower.find(med_name)
+            
+            # If not found, try first word only (e.g., "metoprolol" from "metoprolol tartrate")
+            if idx < 0:
+                first_word = med_name.split()[0] if ' ' in med_name else med_name
+                if len(first_word) >= 4:
+                    idx = source_lower.find(first_word)
+            
             if idx >= 0:
+                meds_found += 1
                 start = max(0, idx - context_window)
                 end = min(len(source_text), idx + len(med_name) + context_window)
                 excerpt = source_text[start:end].strip()
                 if excerpt not in excerpts["medications_evidence"]:
                     excerpts["medications_evidence"].append(f"...{excerpt}...")
                     used_chars += len(excerpt) + 10
+            else:
+                meds_not_found.append(med_name)
         
-        # 4. Find evidence for each lab value (CRITICAL - this is what Langfuse was missing)
+        # Log medications not found in source (potential hallucinations)
+        if meds_not_found:
+            logger.warning(f"Medications NOT in source text (possible hallucination): {meds_not_found[:10]}")
+        logger.info(f"Medications evidence: {meds_found} found, {len(meds_not_found)} not found")
+        
+        # 5. Find evidence for each lab value (CRITICAL - this is what Langfuse was missing)
         for lab in extracted_data.get("lab_results", []):  # ALL labs (removed limit)
             if used_chars >= max_chars:
                 break
@@ -642,9 +856,11 @@ class PDFChartParser:
                         excerpts["lab_values_evidence"].append(f"...{excerpt}...")
                         used_chars += len(excerpt) + 10
         
-        # 5. Build summary
+        # 6. Build summary
+        hpi_status = f"{len(excerpts['hpi_evidence'])} chars" if excerpts['hpi_evidence'] else "not found"
         excerpts["summary"] = (
             f"Document: {len(source_text)} chars. "
+            f"HPI: {hpi_status}. "
             f"Found evidence for: {len(excerpts['conditions_evidence'])} conditions, "
             f"{len(excerpts['medications_evidence'])} medications, "
             f"{len(excerpts['lab_values_evidence'])} lab values."
@@ -661,23 +877,21 @@ class PDFChartParser:
     "original_dob": "date of birth (MM/DD/YYYY)",
     "original_mrn": "medical record number",
     "account_number": "account number or encounter number (look for ACCOUNT NO., Account #, Encounter, FIN, Visit Number)",
-    "authorization_number": "PrimaryCoverageAuthorizationNumber - look for 'PrimaryCoverageAuthorizationNumber:' followed by alphanumeric code like 'A322224250'",
+    "authorization_number": "ONLY if found: look for 'PrimaryCoverageAuthorizationNumber:' followed by alphanumeric code. If NOT in document, use empty string ''",
     "gender": "M or F",
-    "age": 0,
     "admission_date": "first admission/observation date (MM/DD/YYYY)",
     "observation_date": "date patient was on observation status - usually first day (MM/DD/YYYY or null if not mentioned)",
     "inpatient_date": "date patient transitioned to inpatient status - usually day after observation (MM/DD/YYYY or null if not mentioned)",
     "discharge_date": "date patient was discharged (MM/DD/YYYY) - look for DISCHARGE DATE/TIME field. If no discharge date found or patient is still admitted, use null",
-    "place_of_service": "Determine INITIAL point of arrival: If patient 'presents via EMS', 'arrived by ambulance', 'brought by EMS', 'transported by EMS', or mentions '911' → use 'Emergency Department'. If direct admission without ambulance → use 'Hospital'. If outpatient → 'Urgent Care' or 'Clinic'.",
-    "chief_complaint": "Write a SINGLE PARAGRAPH opening hook (40-80 words) for an appeal letter. Format: '[primary condition/diagnosis] with [key symptoms], [abnormal lab findings like elevated WBC, low hemoglobin, elevated troponin, etc.] requiring hospital-level evaluation, treatment, and monitoring.' This will be inserted after 'Your member was admitted inpatient due to' so do NOT start with those words. Include 2-4 key symptoms and 2-4 relevant abnormal lab values when available. Do NOT include patient demographics, age, or medical history. Do NOT use markdown or asterisks. Be concise and factual.",
-    "chief_complaint_short": "Brief symptom list only: 'syncope, unresponsiveness'",
+    "chief_complaint": "Create a compelling 40-80 word narrative hook for a medical appeal. Structure: '[presenting symptom from CHIEF COMPLAINT section], with a history of [relevant chronic conditions from PMH], [what is different from baseline if documented], requiring hospital-level evaluation, treatment, and monitoring.' Example: 'worsening right leg pain and bilateral lower extremity tremors, with a history of Parkinson's disease and recent medication adjustments, symptoms worse than baseline, requiring hospital-level evaluation, treatment, and monitoring.' ONLY include details EXPLICITLY in the source - NO fabrications about respiratory failure, over-sedation, or IV medications unless those EXACT phrases appear.",
+    "chief_complaint_short": "Brief symptom list from Chief Complaint section (3-8 words): 'worsening leg pain and tremors'",
     "hpi": "history of present illness summary - VERBATIM from chart (2-4 sentences with timeline and key details)",
     "conditions": ["CHRONIC DISEASES ONLY from PAST MEDICAL HISTORY section. Extract EXACTLY as written. Do NOT include acute symptoms."],
     "medications": [
-        {{"name": "drug name", "dose": "dose", "route": "PO/IV/etc", "frequency": "frequency"}}
+        {{"name": "ONLY drug names explicitly listed in MEDICATION or MAR sections - do NOT infer medications from treatment descriptions", "dose": "EXACT dose as written - if '50mg TID', write '50mg' not '100mg'. Copy precisely.", "route": "PO/IV/etc or empty string if not listed", "frequency": "ONLY if explicitly stated (e.g. 'BID', 'TID', 'daily'). Copy EXACTLY as shown."}}
     ],
     "lab_results": [
-        {{"name": "test name", "value": "EXACT value from LAB TABLE ONLY - do NOT use values from narrative text", "unit": "unit", "flag": "ONLY 'H' or 'L' if EXPLICITLY marked in chart, otherwise leave BLANK"}}
+        {{"name": "test name", "value": "Copy-paste the EXACT numeric value shown in the lab table - do NOT round, estimate, or modify. If WBC shows 7.6, write 7.6 not 8.2", "unit": "unit", "date": "MM/DD/YY of this specific result", "flag": "ONLY 'H' or 'L' if EXPLICITLY marked, otherwise BLANK"}}
     ],
     "vitals": {{
         "bp": "ONLY if documented (e.g. '120/80') - leave empty string if not in chart",
@@ -686,32 +900,41 @@ class PDFChartParser:
         "rr": "ONLY if documented - leave empty string if not in chart",
         "spo2": "ONLY if documented - leave empty string if not in chart"
     }},
-    "insurance_name": "primary insurance/payer name (look for INSURANCE 1, UHC, Humana, Aetna, etc.)",
-    "insurance_id": "INSURED ID number (look for INSURED ID:, Member ID, Subscriber ID - e.g. 931969345)",
-    "insurance_group": "group number (look for GRP #, Group Number)",
-    "insurance_address": "payer mailing address (look for PO BOX or street address near insurance info)",
-    "insurance_city": "payer city",
-    "insurance_state": "payer state abbreviation (2 letters)",
-    "insurance_zip": "payer zip code",
+    "insurance_name": "primary insurance/payer name ONLY if explicitly in document. Use empty string if not found.",
+    "insurance_id": "INSURED ID ONLY if explicitly in document (look for INSURED ID:, Member ID). Use empty string if not found.",
+    "insurance_group": "group number ONLY if explicitly stated. Use empty string if not found.",
+    "insurance_address": "payer address ONLY if explicitly in document. Use empty string if not found.",
+    "insurance_city": "payer city ONLY if explicitly stated. Use empty string if not found.",
+    "insurance_state": "payer state ONLY if explicitly stated. Use empty string if not found.",
+    "insurance_zip": "payer zip ONLY if explicitly stated. Use empty string if not found.",
     "facility_name": "hospital name",
     "attending_physician": "doctor name",
-    "consults": ["List of specialty consults with key findings. Format: 'Vascular Surgery - recommended BKA due to nonhealing ulcer', 'Podiatry - wound care evaluation', 'Cardiology - cleared for surgery'. Include specialty name AND their recommendation/finding."],
-    "procedures": ["List of completed or planned procedures. Format: 'OR scheduled for right below-knee amputation', 'Bedside wound debridement performed', 'Pending MRI brain'. Include status (completed, pending, scheduled) when available."]
+    "consults": ["List of specialty consults with key findings. Format: 'Vascular Surgery - recommended BKA due to nonhealing ulcer'. Include specialty name AND their recommendation/finding. ONLY include recommendations EXPLICITLY stated in the consult note - do NOT fabricate medication recommendations like 'adding Tramadol' unless that EXACT phrase appears."],
+    "procedures": ["ONLY procedures that were actually COMPLETED DURING THIS ADMISSION with explicit documented results. Format: 'CT chest - bilateral pulmonary emboli identified', 'EGD - gastric ulcer visualized'. Do NOT include pending/ordered/planned procedures. Do NOT include HISTORICAL procedures from prior years. Do NOT fabricate results for tests that were only ordered."]
 }}
 
 CRITICAL INSTRUCTIONS:
 - VITALS: Only include vitals that are EXPLICITLY documented with values. If chart only shows HR and SpO2, leave BP, temp, RR as empty strings. DO NOT fabricate "normal" values.
-- LAB VALUES: Extract ONLY from structured LAB TABLES with columns. Narrative text like "CBC showing anemia 7 down from 9.8" means hemoglobin is 7, NOT a different number. Use the EXACT numeric values shown.
-- LAB FLAGS: Only mark 'H' or 'L' if explicitly shown next to value. Do NOT infer flags - leave blank if not marked.
+- PROCEDURES: ONLY include procedures COMPLETED DURING THIS ADMISSION with DOCUMENTED RESULTS. If a test is "ordered" or "pending" without results, do NOT include it. NEVER fabricate results like "normal" or "negative" for tests that were only ordered. Do NOT confuse HISTORICAL procedures (from prior years/admissions) with CURRENT procedures. A "2010 stress test: no ischemia" is history, not a current result.
+- LAB VALUES: This is CRITICAL - lab hallucination is unacceptable. 
+  STRICT RULES:
+  1. Extract ONLY from structured LAB TABLES with visible columns (DATE | TEST | VALUE | UNIT | FLAG)
+  2. For EACH lab, copy the DATE exactly as shown in the table (e.g., "06/15/26" not "06/18/26")
+  3. Copy the VALUE character-for-character (if table shows "7.6", write "7.6" NOT "8.2" or "8")
+  4. Do NOT fabricate dates - if you can't find a clear date, leave date field empty
+  5. Do NOT average or synthesize values across multiple dates
+  6. If you see labs from multiple dates (06/15, 06/14, 06/13), extract from the MOST RECENT date only
+  7. VERIFY: Before outputting each lab, ask yourself "Did I see this EXACT number in the source?" If unsure, omit it.
+- LAB FLAGS: Only mark 'H' or 'L' if the letters 'H' (High) or 'L' (Low) literally appear next to the value. If you see '*' or '!' or other symbols instead of H/L, leave the flag field BLANK. Do NOT interpret * as H or L - leave blank.
 - CONDITIONS: Extract ONLY from PAST MEDICAL HISTORY section, not from narrative or assessment.
 - PLACE OF SERVICE: Determine based on HOW patient arrived, not current unit. If transported by EMS/ambulance → "Emergency Department". If walked in or direct admit → "Hospital". The SERVICE code (MED, SURG, etc.) shows current unit, not arrival point.
-- CHIEF COMPLAINT (HOOK): Write EXACTLY 2 paragraphs for an appeal letter opening.
+- CHIEF COMPLAINT (HOOK): Extract DOCUMENTED admission reason.
   HOOK FORMAT (SINGLE PARAGRAPH):
   - Write a SINGLE paragraph that will follow "Your member was admitted inpatient due to"
   - Do NOT start with "Your member was admitted" - that's added by the template
-  - Include: [primary condition] with [key symptoms], [abnormal lab findings] requiring hospital-level evaluation, treatment, and monitoring.
-  - Example: "acute COPD exacerbation with shortness of breath, intermittent dizziness, and generalized weakness requiring hospital-level evaluation, treatment, and monitoring."
-  - Include 2-4 key symptoms and 2-4 relevant abnormal lab values when documented
+  - Use ONLY information from CHIEF COMPLAINT, REASON FOR VISIT, or ADMISSION DIAGNOSIS sections
+  - Do NOT invent clinical narratives like "over-sedation", "respiratory failure from medications", etc.
+  - If the chart says "AMS" or "altered mental status" - use that, don't elaborate with causes
   - Do NOT include patient demographics, age, gender, or medical history in this field
   - Do NOT use markdown, asterisks, or any special formatting. Output plain text only.
   
@@ -725,7 +948,19 @@ CRITICAL INSTRUCTIONS:
 - ONLY include information explicitly stated in the chart - do NOT infer or make up findings
 - Do NOT add clinical findings like tachycardia, fever, hypotension unless explicitly documented with values
 - Extract conditions EXACTLY as written in PAST MEDICAL HISTORY
-- Extract all medications with their doses exactly as listed
+- MEDICATIONS: ONLY extract medications whose drug names are EXPLICITLY listed in the chart (e.g., in a MEDICATIONS, MAR, or ORDERS section). Do NOT infer medications from treatment descriptions like "IV fluids" or "antibiotics" - only extract if the specific drug name appears (e.g., "Lactated Ringers", "Vancomycin"). If no medication list is visible, return an empty array.
+- VITALS: Only extract vitals if you see actual numeric values (e.g., "BP 120/80"). Do NOT fabricate normal values.
+- HPI: Copy text VERBATIM from the chart. Do NOT rephrase or add details not present.
+
+FINAL VERIFICATION - Before returning your response, check EACH field:
+1. LAB VALUES: Did I copy the EXACT number from the source? If source shows WBC "7.6", I must output "7.6" not "8.2"
+2. LAB DATES: Did I copy the EXACT date from the source? If source shows "06/15/26", I must output "06/15/26" not "06/18/26"
+3. CHIEF COMPLAINT: Did I use the PRESENTING SYMPTOM from Chief Complaint + RELEVANT PMH conditions? No fabricated clinical events like "over-sedation", "respiratory failure", or medication-caused issues unless EXPLICITLY documented
+4. CONSULTS: Did I only include recommendations EXPLICITLY stated? No "adding Tramadol" unless that exact recommendation appears
+5. AGE: Did I calculate from DOB, not copy from narrative notes?
+6. MEDICATIONS: Did I copy doses EXACTLY? If source shows "50mg TID", output "50mg" not "100mg"
+
+IF UNSURE ABOUT ANY VALUE, OMIT IT rather than guess.
 
 CHART TEXT:
 {text[:100000]}
@@ -737,7 +972,7 @@ Return ONLY valid JSON, no other text."""
         response = bedrock.converse(
             modelId=self.model_id,
             messages=[{"role": "user", "content": [{"text": prompt}]}],
-            inferenceConfig={"maxTokens": 4000, "temperature": 0.1}
+            inferenceConfig={"maxTokens": 4000, "temperature": 0.0}  # Zero temp for exact extraction
         )
         
         result_text = response["output"]["message"]["content"][0]["text"]
@@ -773,30 +1008,43 @@ Return ONLY valid JSON, no other text."""
                 # This ensures Langfuse LLM-as-a-Judge can verify labs that appear late in doc
                 smart_excerpts = self._build_langfuse_excerpts(data, text, max_chars=50000)
                 
+                # Format source evidence as plain text for Langfuse evaluator
+                # This allows evaluator to use {{input}} directly without nested JSON
+                source_text_for_eval = f"""=== PATIENT DEMOGRAPHICS ===
+{smart_excerpts.get('patient_demographics', '')}
+
+=== HPI / CHIEF COMPLAINT ===
+{smart_excerpts.get('hpi_evidence', '(Not found in document)')}
+
+=== CONDITIONS EVIDENCE ===
+{chr(10).join(smart_excerpts.get('conditions_evidence', []))}
+
+=== MEDICATIONS EVIDENCE ===
+{chr(10).join(smart_excerpts.get('medications_evidence', []))}
+
+=== LAB VALUES EVIDENCE ===
+{chr(10).join(smart_excerpts.get('lab_values_evidence', []))}
+
+{smart_excerpts.get('summary', '')}"""
+                
+                # Log what we're sending for debugging
+                logger.info(f"Langfuse input length: {len(source_text_for_eval)} chars")
+ 
+                logger.debug(f"Langfuse input preview: {source_text_for_eval[:500]}...")
+                
                 langfuse_trace = langfuse_client.trace(
                     name="pdf-chart-extraction",
-                    input={
+                    input=source_text_for_eval,  # Plain text - evaluator uses {{input}}
+                    output=data,  # Extracted JSON - evaluator uses {{output}}
+                    metadata={
+                        "model": self.model_id,
                         "pdf_length_chars": len(text),
-                        "source_evidence": smart_excerpts,  # Focused excerpts around extracted values
-                        "extracted_data_preview": {
-                            "conditions": data.get("conditions", [])[:10],
-                            "medications": [m.get("name") for m in data.get("medications", [])[:8]],
-                            "lab_results": [f"{l.get('name')}={l.get('value')}" for l in data.get("lab_results", [])[:15]],
-                        }
-                    },
-                    output={
-                        "extracted_data": data,
-                        "faithfulness_validation": {
-                            "score": faithfulness_result["faithfulness_score"],
-                            "conditions_validated": faithfulness_result["conditions_validated"],
-                            "conditions_flagged": faithfulness_result["conditions_flagged"],
-                            "medications_validated": len(faithfulness_result["medications_validated"]),
-                            "medications_flagged": [m.get("name", str(m)) for m in faithfulness_result["medications_flagged"]],
-                            "lab_results_validated": len(faithfulness_result.get("lab_results_validated", [])),
-                            "lab_results_flagged": [f"{l.get('name')}={l.get('value')}" for l in faithfulness_result.get("lab_results_flagged", [])],
-                        }
-                    },
-                    metadata={"model": self.model_id}
+                        "faithfulness_score": faithfulness_result["faithfulness_score"],
+                        "conditions_validated": len(faithfulness_result["conditions_validated"]),
+                        "conditions_flagged": len(faithfulness_result["conditions_flagged"]),
+                        "medications_validated": len(faithfulness_result["medications_validated"]),
+                        "medications_flagged": len(faithfulness_result["medications_flagged"]),
+                    }
                 )
                 langfuse_trace.generation(
                     name="extract-clinical-data",
@@ -822,6 +1070,185 @@ Return ONLY valid JSON, no other text."""
             logger.warning(f"REMOVING medications not in source: {faithfulness_result['medications_flagged']}")
             # Keep only validated medications
             data["medications"] = faithfulness_result["medications_validated"]
+        
+        if faithfulness_result["lab_results_flagged"]:
+            flagged_labs = [f"{l.get('name')}={l.get('value')}" for l in faithfulness_result['lab_results_flagged'][:5]]
+            logger.warning(f"REMOVING {len(faithfulness_result['lab_results_flagged'])} hallucinated lab values: {flagged_labs}")
+            # Keep only validated labs
+            data["lab_results"] = faithfulness_result["lab_results_validated"]
+        
+        # Sanitize chief complaint if hallucinated phrases detected
+        if faithfulness_result.get("chief_complaint_hallucinations"):
+            phrases = faithfulness_result["chief_complaint_hallucinations"]
+            logger.warning(f"Chief complaint contains hallucinated phrases: {phrases}")
+            
+            # Strategy: Strip ONLY the fabricated phrases, keep the rest
+            # This preserves the LLM's clinical synthesis while removing lies
+            chief = data.get("chief_complaint", "")
+            original_len = len(chief)
+            
+            for phrase in phrases:
+                # Case-insensitive removal of hallucinated phrases
+                chief = re.sub(re.escape(phrase), "", chief, flags=re.IGNORECASE)
+            
+            # Clean up artifacts from removal
+            chief = re.sub(r'\s+', ' ', chief).strip()
+            chief = re.sub(r'\s*,\s*,\s*', ', ', chief)  # Fix double commas
+            chief = re.sub(r'\s*\.\s*\.', '.', chief)  # Fix double periods
+            chief = re.sub(r'^[,.\s]+', '', chief)  # Leading punctuation
+            chief = re.sub(r'[,.\s]+$', '', chief)  # Trailing punctuation
+            chief = re.sub(r'\bfor\s+$', '', chief)  # Dangling "for"
+            chief = re.sub(r'\bfrom\s+$', '', chief)  # Dangling "from"
+            chief = re.sub(r'\bafter\s+$', '', chief)  # Dangling "after"
+            chief = re.sub(r'\bdue to\s+$', '', chief)  # Dangling "due to"
+            
+            # If we stripped too much (< 30% remains or < 30 chars), rebuild from conditions
+            if len(chief) < 30 or len(chief) < original_len * 0.3:
+                logger.warning(f"Chief complaint too damaged after stripping ({len(chief)} chars left), rebuilding from conditions")
+                
+                # Build from validated conditions (which come from Past Medical History)
+                conditions = data.get("conditions", [])
+                short = data.get("chief_complaint_short", "")
+                
+                if short and conditions:
+                    # Combine short complaint with PMH conditions for context
+                    # Filter to relevant chronic conditions
+                    relevant_conditions = [c for c in conditions if any(word in c.lower() for word in 
+                        ["parkinson", "diabetes", "cardiac", "copd", "chf", "renal", "hypertension", "htn", 
+                         "atrial", "heart", "chronic", "cancer", "stroke", "dementia"])][:2]
+                    
+                    if relevant_conditions:
+                        condition_text = ", ".join(relevant_conditions)
+                        chief = f"{short}, with a history of {condition_text}, requiring hospital-level evaluation, treatment, and monitoring"
+                    else:
+                        chief = f"{short}, requiring hospital-level evaluation, treatment, and monitoring"
+                elif short:
+                    chief = f"{short}, requiring hospital-level evaluation, treatment, and monitoring"
+                elif conditions:
+                    chief = f"{', '.join(conditions[:3])}, requiring hospital-level evaluation, treatment, and monitoring"
+                else:
+                    chief = "symptoms requiring hospital-level evaluation, treatment, and monitoring"
+            
+            data["chief_complaint"] = chief
+            logger.info(f"Sanitized chief complaint: {chief[:100]}...")
+        
+        # Sanitize HPI if hallucinated phrases detected
+        if faithfulness_result.get("hpi_hallucinations"):
+            phrases = faithfulness_result["hpi_hallucinations"]
+            logger.warning(f"HPI contains hallucinated phrases: {phrases}")
+            # Strip the fabricated phrases from HPI instead of replacing entirely
+            # HPI is longer, so try to salvage what we can
+            hpi = data.get("hpi", "")
+            for phrase in phrases:
+                # Case-insensitive removal of hallucinated phrases
+                hpi = re.sub(re.escape(phrase), "", hpi, flags=re.IGNORECASE)
+            # Clean up multiple spaces and awkward punctuation
+            hpi = re.sub(r'\s+', ' ', hpi).strip()
+            hpi = re.sub(r'\s*,\s*,\s*', ', ', hpi)  # Fix double commas
+            hpi = re.sub(r'\s*\.\s*\.', '.', hpi)  # Fix double periods
+            data["hpi"] = hpi
+            logger.info(f"Cleaned HPI by removing fabricated phrases: {phrases}")
+        
+        # Sanitize lab flags - some flags are logically impossible
+        # e.g., eGFR flagged "H" makes no sense (low eGFR is concerning, not high)
+        for lab in data.get("lab_results", []):
+            name_lower = lab.get("name", "").lower()
+            flag = lab.get("flag", "")
+            value_str = str(lab.get("value", ""))
+            
+            try:
+                value = float(value_str) if value_str else None
+            except ValueError:
+                value = None
+            
+            # CORRECT lab flags based on clinical knowledge of normal ranges
+            # The LLM sees * in the source and guesses H/L, but often gets direction wrong
+            
+            # eGFR: < 60 is LOW (kidney dysfunction), never "high"
+            if "egfr" in name_lower:
+                if flag == "H":
+                    logger.warning(f"Correcting flag: eGFR={value_str} cannot be 'H' - low is the concern")
+                    lab["flag"] = "L" if value and value < 60 else ""
+                elif value and value < 60 and not flag:
+                    lab["flag"] = "L"  # Add missing low flag
+            
+            # HGB (Hemoglobin): < 12 is LOW (anemia), > 17 is HIGH
+            if ("hgb" in name_lower or "hemoglobin" in name_lower):
+                if flag == "H" and value and value < 14:
+                    logger.warning(f"Correcting flag: HGB={value_str} flagged 'H' but value is low")
+                    lab["flag"] = "L" if value < 12 else ""
+                elif value and value < 12 and not flag:
+                    lab["flag"] = "L"
+            
+            # HCT (Hematocrit): < 36 is LOW, > 50 is HIGH  
+            if ("hct" in name_lower or "hematocrit" in name_lower):
+                if flag == "H" and value and value < 45:
+                    logger.warning(f"Correcting flag: HCT={value_str} flagged 'H' but value is low")
+                    lab["flag"] = "L" if value < 36 else ""
+                elif value and value < 36 and not flag:
+                    lab["flag"] = "L"
+            
+            # Glucose: < 70 is LOW (hypoglycemia), > 100 fasting / > 140 random is HIGH
+            if "glucose" in name_lower or "gluc" in name_lower:
+                if flag == "L" and value and value > 100:
+                    logger.warning(f"Correcting flag: Glucose={value_str} flagged 'L' but value is high")
+                    lab["flag"] = "H"
+                elif value and value > 140 and not flag:
+                    lab["flag"] = "H"
+        
+        # Clean up suspicious medication frequencies
+        # Common fabrications: BID when source says PRN, 4X/day when source says TID
+        for med in data.get("medications", []):
+            if med.get("frequency_flagged"):
+                logger.warning(f"Clearing suspicious frequency for {med.get('name')}: was '{med.get('frequency')}'")
+                med["frequency"] = ""  # Clear to avoid misinformation
+                del med["frequency_flagged"]
+        
+        # Validate medication doses and frequencies against source text
+        source_lower = text.lower()
+        for med in data.get("medications", []):
+            med_name = med.get("name", "").lower()
+            dose = med.get("dose", "")
+            freq = med.get("frequency", "")
+            
+            # Skip if no med name
+            if not med_name:
+                continue
+            
+            # Find medication context in source (100 chars around mention)
+            med_idx = source_lower.find(med_name[:5])  # First 5 chars of drug name
+            if med_idx == -1:
+                continue
+            
+            med_context = source_lower[max(0, med_idx-50):med_idx+150]
+            
+            # Check for fractional tablet doses - these are often fabricated
+            # Real prescriptions say "1 tablet" or "2 tablets", rarely "1.5 tablet"
+            if "1.5 tablet" in dose.lower() or "0.5 tablet" in dose.lower():
+                # Check if fractional dose is actually in source
+                if "1.5" not in med_context and "½" not in med_context and "half" not in med_context:
+                    logger.warning(f"Suspicious fractional dose for {med_name}: '{dose}' - not found in source context")
+                    # Try to extract real dose from context
+                    dose_match = re.search(r'(\d+)\s*(mg|tablet|tab|ml)', med_context)
+                    if dose_match:
+                        med["dose"] = dose_match.group(0)
+                        logger.info(f"Corrected dose to: {med['dose']}")
+            
+            # Check for frequency mismatches
+            # "4X/day" should be "QID" in medical terms, but if source says "TID", that's 3x
+            freq_lower = freq.lower()
+            if "4x" in freq_lower or "4 times" in freq_lower or "qid" in freq_lower:
+                # Check if source actually says QID/4x or something different
+                if "tid" in med_context or "three times" in med_context or "3 times" in med_context:
+                    logger.warning(f"Frequency mismatch for {med_name}: extracted '{freq}' but source shows TID")
+                    med["frequency"] = "TID"
+            
+            # Validate common drugs with known dosing
+            if "sinemet" in med_name or "carbidopa" in med_name or "levodopa" in med_name:
+                # Sinemet is usually 1 tablet TID, not 1.5 tablet 4X/day
+                if "tid" in med_context and ("4x" in freq_lower or "qid" in freq_lower):
+                    logger.warning(f"Sinemet frequency correction: '{freq}' -> 'TID' (source shows TID)")
+                    med["frequency"] = "TID"
         
         # Score the extraction quality
         if langfuse_trace:
@@ -913,7 +1340,7 @@ Return ONLY valid JSON, no other text."""
             observation_date=data.get("observation_date", ""),
             inpatient_date=data.get("inpatient_date", ""),
             discharge_date=data.get("discharge_date", ""),
-            place_of_service=data.get("place_of_service", "Emergency Department"),
+            place_of_service=data.get("place_of_service", "Hospital"),
             place_of_service_raw_code=data.get("place_of_service_raw_code", ""),
             chief_complaint_short=data.get("chief_complaint_short", ""),
             chief_complaint=data.get("chief_complaint", ""),
@@ -1080,14 +1507,21 @@ Return ONLY valid JSON, no other text."""
         inpatient_date = self._normalize_date(extracted.inpatient_date) if extracted.inpatient_date else ""
         discharge_date = self._normalize_date(extracted.discharge_date) if extracted.discharge_date else ""
         
-        # Use extracted age, or calculate from DOB
-        age = extracted.age
-        if not age and dob:
+        # ALWAYS calculate age from DOB - don't trust LLM extraction
+        # This prevents LLM from copying wrong age from narrative text like "70-year-old female" in consults
+        age = 0
+        if dob:
             try:
                 birth = datetime.strptime(dob, "%Y-%m-%d")
                 age = (datetime.now() - birth).days // 365
+                logger.info(f"Calculated age from DOB: {age}")
             except:
                 pass
+        
+        # Fallback to extracted age only if calculation failed
+        if not age and extracted.age:
+            age = extracted.age
+            logger.warning(f"Using LLM-extracted age (DOB calculation failed): {age}")
         
         # Build PatientStayData
         patient_data = PatientStayData(
@@ -1110,7 +1544,7 @@ Return ONLY valid JSON, no other text."""
             inpatient_date=inpatient_date,
             discharge_date=discharge_date,
             encounter_status="in-progress" if not discharge_date else "finished",
-            place_of_service=extracted.place_of_service or "Emergency Department",
+            place_of_service=extracted.place_of_service or "Hospital",
             place_of_service_raw_code=extracted.place_of_service_raw_code or "",
             chief_complaint_short=extracted.chief_complaint_short,
             chief_complaint=extracted.chief_complaint,
@@ -1139,6 +1573,62 @@ Return ONLY valid JSON, no other text."""
         
         return patient_data
     
+    def _extract_real_chief_complaint_from_source(self, source_text: str) -> str:
+        """Extract the REAL chief complaint directly from PDF source text.
+        
+        Used when LLM extraction contains hallucinations. This does simple
+        pattern matching to find the actual chief complaint from the source.
+        """
+        if not source_text:
+            return ""
+        
+        source_lower = source_text.lower()
+        
+        # Look for common chief complaint markers in order of specificity
+        patterns = [
+            ("chief complaint:", 300),
+            ("chief complaint", 300),
+            ("cc:", 200),
+            ("reason for visit:", 300),
+            ("reason for visit", 300),
+            ("presenting complaint:", 300),
+            ("presenting complaint", 300),
+        ]
+        
+        for pattern, max_len in patterns:
+            idx = source_lower.find(pattern)
+            if idx >= 0:
+                # Start after the header
+                start = idx + len(pattern)
+                # Find the end - next section header or double newline
+                excerpt = source_text[start:start + max_len].strip()
+                
+                # Clean up - remove leading colons/whitespace
+                excerpt = excerpt.lstrip(": \t\n")
+                
+                # Find natural endpoint
+                for end_marker in ["\n\n", "\nHISTORY", "\nHPI", "\nPAST", "\nALLERGIES", 
+                                   "\nMEDICATIONS", "\nVITALS", "\nPHYSICAL", "\nDIAGNOSIS"]:
+                    marker_idx = excerpt.upper().find(end_marker)
+                    if marker_idx > 10:  # Don't cut too short
+                        excerpt = excerpt[:marker_idx].strip()
+                        break
+                
+                # Also check for lowercase section starts
+                for end_marker in ["\nhistory", "\npast", "\nallergies"]:
+                    marker_idx = excerpt.lower().find(end_marker)
+                    if marker_idx > 10:
+                        excerpt = excerpt[:marker_idx].strip()
+                        break
+                
+                if excerpt and len(excerpt) > 5:
+                    # Clean up trailing punctuation
+                    excerpt = excerpt.rstrip(".,;:")
+                    logger.info(f"Extracted real chief complaint from source: {excerpt[:80]}...")
+                    return excerpt
+        
+        return ""
+
     def _extract_raw_chief_complaint(self, source_text: str) -> str:
         """Extract raw chief complaint / HPI / surgical history from PDF text for evaluator.
         
@@ -1244,6 +1734,10 @@ Return ONLY valid JSON, no other text."""
                 "conditions": patient_data.conditions[:5],
                 "lab_results": patient_data.lab_results[:20]  # Include labs for faithfulness check
             }
+            
+            # Debug: log what we're sending to Langfuse
+            logger.info(f"Langfuse hook input_data labs count: {len(patient_data.lab_results)}")
+            logger.info(f"Langfuse hook input_data labs preview: {patient_data.lab_results[:3]}")
             
             # Create a trace for hook evaluation
             # Send hook as plain string - evaluators typically use {{output}} directly

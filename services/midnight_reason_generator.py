@@ -366,6 +366,7 @@ class MidnightReasonGenerator:
             "closing_summary": self._last_closing_summary,
             "conditions_used": self._last_validation_result.get("conditions_used", []),
             "conditions_hallucinated": self._last_validation_result.get("conditions_hallucinated", []),
+            "flow_issues": self._last_validation_result.get("flow_issues", []),
             "generation_timestamp": self._last_generation_timestamp,
             "source": "midnight-reason-generator"
         }
@@ -437,9 +438,33 @@ class MidnightReasonGenerator:
                 else:
                     conditions_hallucinated.append(term)
         
+        # Flow quality validation - check for template collisions and grammar issues
+        flow_issues = []
+        
+        # Check for doubled phrases (template collision)
+        collision_patterns = [
+            "the member continued to require inpatient care for the patient continued",
+            "the patient continued to require inpatient care for the patient continued",
+            "the member still required hospital-level care due to the patient still required",
+            "the patient still required hospital-level care due to the patient still required",
+            "require inpatient care for require inpatient care",
+            "hospital-level care due to hospital-level care",
+        ]
+        for pattern in collision_patterns:
+            if pattern in generated_lower:
+                flow_issues.append(f"Template collision: '{pattern[:50]}...'")
+        
+        # Check for repeated consecutive words (stuttering)
+        words = generated_lower.split()
+        for i in range(len(words) - 2):
+            if words[i] == words[i+1] == words[i+2] and len(words[i]) > 2:
+                flow_issues.append(f"Repeated word: '{words[i]}'")
+                break
+        
         return {
             "conditions_used": list(set(conditions_used)),
-            "conditions_hallucinated": list(set(conditions_hallucinated))
+            "conditions_hallucinated": list(set(conditions_hallucinated)),
+            "flow_issues": flow_issues
         }
     
     @property
@@ -550,6 +575,9 @@ class MidnightReasonGenerator:
                     "consults": patient_context.get('consults', [])[:5],
                     "procedures": patient_context.get('procedures', [])[:5]
                 }
+                # Debug: log what we're sending to Langfuse
+                logger.info(f"Langfuse MN input_data labs count: {len(patient_context.get('lab_results', []))}")
+                logger.info(f"Langfuse MN input_data labs preview: {patient_context.get('lab_results', [])[:3]}")
                 logger.info(f"Langfuse input_data consults: {input_data.get('consults', [])}")
                 logger.info(f"Langfuse input_data procedures: {input_data.get('procedures', [])}")
             
@@ -609,6 +637,56 @@ class MidnightReasonGenerator:
                         name="relevance",
                         value=keywords_found / len(keywords),
                         comment=f"{comp_name}: {keywords_found}/{len(keywords)} keywords"
+                    )
+                    
+                    # Flow quality check - catches template collisions and grammar issues
+                    flow_issues = []
+                    flow_score = 1.0
+                    
+                    # Check for doubled phrases (template collision)
+                    collision_patterns = [
+                        ("the member continued to require inpatient care for the patient continued", "doubled MN1 prefix"),
+                        ("the patient continued to require inpatient care for the patient continued", "doubled MN1 prefix"),
+                        ("the member still required hospital-level care due to the patient still required", "doubled MN2 prefix"),
+                        ("the patient still required hospital-level care due to the patient still required", "doubled MN2 prefix"),
+                        ("require inpatient care for require inpatient care", "doubled phrase"),
+                        ("hospital-level care due to hospital-level care", "doubled phrase"),
+                    ]
+                    for pattern, issue_name in collision_patterns:
+                        if pattern.lower() in comp_text.lower():
+                            flow_issues.append(issue_name)
+                            flow_score -= 0.5
+                    
+                    # Check for required sentence endings
+                    if comp_id == "midnight_reason_1":
+                        if "remained unsafe for discharge due to" not in comp_text.lower():
+                            flow_issues.append("missing required MN1 ending")
+                            flow_score -= 0.2
+                    elif comp_id == "midnight_reason_2":
+                        if "inability to safely transition to a lower level of care because" not in comp_text.lower():
+                            flow_issues.append("missing required MN2 ending")
+                            flow_score -= 0.2
+                    elif comp_id == "closing_summary":
+                        if not comp_text.lower().startswith("in summary"):
+                            flow_issues.append("missing 'In summary' opening")
+                            flow_score -= 0.2
+                        if "should be approved as medically necessary" not in comp_text.lower():
+                            flow_issues.append("missing required closing phrase")
+                            flow_score -= 0.2
+                    
+                    # Check for repeated words (stutter)
+                    words = comp_text.lower().split()
+                    for i in range(len(words) - 2):
+                        if words[i] == words[i+1] == words[i+2] and len(words[i]) > 2:
+                            flow_issues.append(f"repeated word: '{words[i]}'")
+                            flow_score -= 0.1
+                            break
+                    
+                    flow_score = max(0.0, flow_score)
+                    comp_trace.score(
+                        name="flow_quality",
+                        value=flow_score,
+                        comment=f"{comp_name}: {', '.join(flow_issues) if flow_issues else 'OK'}"
                     )
             
             langfuse_client.flush()
@@ -841,6 +919,35 @@ Follow the format and style of formal Medicare appeal letters."""
                 "midnight_reason_2": ""
             }
         
+        # Clean up any accidentally included prefixes from MN outputs
+        mn1 = result.get("midnight_reason_1", "")
+        mn2 = result.get("midnight_reason_2", "")
+        
+        mn1_prefixes = [
+            "during the first midnight, the member continued to require inpatient care for",
+            "during the first midnight, the patient continued to require inpatient care for",
+            "the member continued to require inpatient care for",
+            "the patient continued to require inpatient care for",
+        ]
+        for prefix in mn1_prefixes:
+            if mn1.lower().startswith(prefix):
+                mn1 = mn1[len(prefix):].lstrip(" ,")
+                break
+        
+        mn2_prefixes = [
+            "during the second midnight, the member still required hospital-level care due to",
+            "during the second midnight, the patient still required hospital-level care due to",
+            "the member still required hospital-level care due to",
+            "the patient still required hospital-level care due to",
+        ]
+        for prefix in mn2_prefixes:
+            if mn2.lower().startswith(prefix):
+                mn2 = mn2[len(prefix):].lstrip(" ,")
+                break
+        
+        result["midnight_reason_1"] = mn1
+        result["midnight_reason_2"] = mn2
+        
         # Log each component separately to Langfuse
         self._log_components_to_langfuse(trace, result, patient_context)
         
@@ -876,7 +983,7 @@ Your task is to generate three components for a Medicare inpatient appeal letter
    - Past medical history using abbreviations (HTN, DM, COPD, CHF, CKD, HLD, CAD, AFib, etc.)
    - Reason for presenting to the ED
 
-2. **MidnightReason1** (First Midnight): Generate a COMPLETE paragraph that starts with 'During the first midnight, the patient continued to require inpatient care for [condition]'. Include:
+2. **MidnightReason1** (First Midnight): Generate content that COMPLETES the sentence "During the first midnight, the member continued to require inpatient care for..." - DO NOT include this prefix yourself, the template adds it. Your output should start directly with the condition/reason. Include:
    - Primary diagnoses with INLINE lab values: "acute kidney injury (Creatinine 1.47 mg/dL, eGFR 36 mL/min/1.73m²)"
    - Specific pathogen if culture available: "urinary tract infection (Klebsiella pneumoniae)"
    - Lab findings inline: "anemia (Hgb 9.7 g/dL)", "cardiac strain (Troponin I 46 ng/L)"
@@ -885,7 +992,7 @@ Your task is to generate three components for a Medicare inpatient appeal letter
    - Monitoring: telemetry, serial labs
    - End with '...and remained unsafe for discharge due to [specific clinical reason].'
 
-3. **MidnightReason2** (Second Midnight): Generate a COMPLETE paragraph that starts with 'During the second midnight, the patient still required hospital-level care due to [condition]'. Include:
+3. **MidnightReason2** (Second Midnight): Generate content that COMPLETES the sentence "During the second midnight, the member still required hospital-level care due to..." - DO NOT include this prefix yourself, the template adds it. Your output should start directly with the condition/reason. Include:
    - Show PROGRESSION from Day 1 (continued, persistent, pending results, worsening/improving)
    - Continued medications with routes: "continuation of IV Ceftriaxone for [organism]", "PO diuretics"
    - Serial labs showing trends if available
@@ -1018,6 +1125,38 @@ Follow the format and style of formal Medicare appeal letters."""
                 "midnight_reason_2": ""
             }
         
+        # Clean up any accidentally included prefixes from MN outputs
+        # This prevents doubled text like "the member continued to require inpatient care for the patient continued to require inpatient care for"
+        mn1 = result.get("midnight_reason_1", "")
+        mn2 = result.get("midnight_reason_2", "")
+        
+        # Strip MN1 prefixes (case-insensitive)
+        mn1_prefixes = [
+            "during the first midnight, the member continued to require inpatient care for",
+            "during the first midnight, the patient continued to require inpatient care for",
+            "the member continued to require inpatient care for",
+            "the patient continued to require inpatient care for",
+        ]
+        for prefix in mn1_prefixes:
+            if mn1.lower().startswith(prefix):
+                mn1 = mn1[len(prefix):].lstrip(" ,")
+                break
+        
+        # Strip MN2 prefixes (case-insensitive)
+        mn2_prefixes = [
+            "during the second midnight, the member still required hospital-level care due to",
+            "during the second midnight, the patient still required hospital-level care due to",
+            "the member still required hospital-level care due to",
+            "the patient still required hospital-level care due to",
+        ]
+        for prefix in mn2_prefixes:
+            if mn2.lower().startswith(prefix):
+                mn2 = mn2[len(prefix):].lstrip(" ,")
+                break
+        
+        result["midnight_reason_1"] = mn1
+        result["midnight_reason_2"] = mn2
+        
         # Log each component separately to Langfuse
         self._log_components_to_langfuse(trace, result, patient_context)
         
@@ -1048,6 +1187,11 @@ Follow the format and style of formal Medicare appeal letters."""
             patient_data.conditions,
             self._last_input_medications
         )
+        
+        # Log flow issues prominently
+        flow_issues = self._last_validation_result.get("flow_issues", [])
+        if flow_issues:
+            logger.warning(f"FLOW QUALITY ISSUES DETECTED: {flow_issues}")
         
         return MidnightReasonOutput(
             patient_background=patient_bg,
