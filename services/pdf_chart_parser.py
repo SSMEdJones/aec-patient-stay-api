@@ -216,6 +216,7 @@ class PDFChartParser:
         self._last_source_text = ""
         self._last_faithfulness_result = {}
         self._last_extraction_timestamp = None
+        self._last_trace_ids = {}  # Langfuse trace IDs for score fetching
     
     def _get_bedrock_client(self):
         """Create a fresh Bedrock client to pick up refreshed credentials."""
@@ -247,6 +248,7 @@ class PDFChartParser:
             "lab_results_flagged": self._last_faithfulness_result.get("lab_results_flagged", []),
             "extraction_timestamp": self._last_extraction_timestamp,
             "details": self._last_faithfulness_result.get("details", []),
+            "trace_ids": self._last_trace_ids,  # Langfuse trace IDs for score fetching
         }
     
     def extract_text(self, pdf_path: str) -> str:
@@ -549,6 +551,7 @@ class PDFChartParser:
         for med in extracted_data.get("medications", []):
             med_name = med.get("name", "").lower() if isinstance(med, dict) else str(med).lower()
             med_freq = med.get("frequency", "").lower() if isinstance(med, dict) else ""
+            med_dose = med.get("dose", "").lower() if isinstance(med, dict) else ""
             
             # Check first word of medication name (generic name)
             first_word = med_name.split()[0] if med_name.split() else ""
@@ -559,44 +562,66 @@ class PDFChartParser:
                 name_found = True
             
             if name_found:
-                # Also validate frequency if provided - flag if frequency is fabricated
-                if med_freq and med_freq.lower() not in ["", "prn", "as needed", "once", "daily"]:
-                    # Check if this exact frequency appears near medication name (within 150 chars)
-                    escaped_name = re.escape(first_word if first_word else med_name)
+                # Get context around medication name for validating dose and frequency
+                escaped_name = re.escape(first_word if first_word else med_name)
+                name_match = re.search(escaped_name, source_lower, re.IGNORECASE)
+                
+                if name_match:
+                    # Use wider context (300 chars) to catch frequency/dose that may not be immediately adjacent
+                    start = max(0, name_match.start() - 100)
+                    end = min(len(source_lower), name_match.end() + 300)
+                    context = source_lower[start:end]
                     
-                    # Get context around medication name
-                    name_match = re.search(escaped_name, source_lower, re.IGNORECASE)
-                    if name_match:
-                        start = max(0, name_match.start() - 75)
-                        end = min(len(source_lower), name_match.end() + 150)
-                        context = source_lower[start:end]
+                    # DOSE VALIDATION - check if extracted dose appears in context
+                    if med_dose and med_dose not in ["", "n/a", "unknown"]:
+                        dose_in_context = med_dose.lower() in context
                         
+                        # Check for dose contradictions (e.g., "1 tablet" vs "1.5 tablet")
+                        if not dose_in_context:
+                            # Try to find the actual dose in source
+                            tablet_match = re.search(r'(\d+\.?\d*)\s*(?:tablet|tab)', context)
+                            mg_match = re.search(r'(\d+\.?\d*)\s*(?:mg|mcg)', context)
+                            
+                            if tablet_match:
+                                source_dose = tablet_match.group(0)
+                                if med_dose.replace(" ", "") != source_dose.replace(" ", ""):
+                                    logger.warning(f"Medication dose mismatch: source says '{source_dose}' but extracted '{med_dose}': {med_name} - correcting")
+                                    med["dose"] = source_dose
+                                    med["dose_flagged"] = True
+                            elif mg_match and "mg" in med_dose:
+                                source_dose = mg_match.group(0)
+                                # Only flag if significantly different
+                                try:
+                                    extracted_num = float(re.search(r'(\d+\.?\d*)', med_dose).group(1))
+                                    source_num = float(mg_match.group(1))
+                                    if abs(extracted_num - source_num) > 0.5:  # More than 0.5 difference
+                                        logger.warning(f"Medication dose mismatch: source has '{source_dose}' but extracted '{med_dose}': {med_name}")
+                                        med["dose_flagged"] = True
+                                except:
+                                    pass
+                    
+                    # FREQUENCY VALIDATION - only correct clear mismatches, don't clear frequencies
+                    if med_freq and med_freq.lower() not in ["", "prn", "as needed", "once", "daily"]:
                         # Check if extracted frequency appears in context
                         freq_in_context = med_freq.lower() in context
                         
-                        # Also check if PRN appears (would contradict a fixed schedule)
-                        prn_in_context = "prn" in context or "as needed" in context or "q6h" in context
+                        # Check for frequency contradictions - only correct when source clearly says different
+                        tid_in_context = "tid" in context or "three times" in context or "3 times" in context
+                        bid_in_context = "bid" in context or "twice" in context or "2 times" in context
+                        qid_in_context = "qid" in context or "four times" in context or "4 times" in context
                         
-                        # Check for frequency contradictions
-                        tid_in_context = "tid" in context or "three times" in context
-                        bid_in_context = "bid" in context or "twice" in context
-                        
-                        if prn_in_context and med_freq.lower() in ["bid", "tid", "qid", "4x/day", "twice daily", "three times"]:
-                            # Medication is PRN but we extracted a fixed schedule - flag it
-                            logger.warning(f"Medication appears to be PRN but extracted as {med_freq}: {med_name}")
-                            med["frequency_flagged"] = True
-                        elif tid_in_context and med_freq.lower() in ["4x/day", "qid", "four times"]:
-                            # Source says TID but we extracted 4X/day - wrong
-                            logger.warning(f"Medication frequency mismatch: source says TID but extracted {med_freq}: {med_name}")
-                            med["frequency_flagged"] = True
-                        elif bid_in_context and med_freq.lower() in ["tid", "qid", "4x/day", "three times", "four times"]:
-                            # Source says BID but we extracted more frequent - wrong
-                            logger.warning(f"Medication frequency mismatch: source says BID but extracted {med_freq}: {med_name}")
-                            med["frequency_flagged"] = True
-                        elif not freq_in_context:
-                            # Frequency not found near medication - flag it
-                            logger.warning(f"Medication frequency may be wrong: {med_name} '{med_freq}' not found near medication in source")
-                            med["frequency_flagged"] = True
+                        if tid_in_context and not bid_in_context and med_freq.lower() in ["bid", "twice", "twice daily"]:
+                            # Source says TID but we extracted BID - correct it
+                            logger.warning(f"Medication frequency mismatch: source says TID but extracted {med_freq}: {med_name} - correcting to TID")
+                            med["frequency"] = "TID"
+                            med["frequency_corrected"] = True
+                        elif bid_in_context and not tid_in_context and med_freq.lower() in ["tid", "three times"]:
+                            # Source says BID but we extracted TID - correct it
+                            logger.warning(f"Medication frequency mismatch: source says BID but extracted {med_freq}: {med_name} - correcting to BID")
+                            med["frequency"] = "BID"
+                            med["frequency_corrected"] = True
+                        # DON'T clear frequencies - just leave them even if not found in context
+                        # The LLM may have extracted correctly from a different part of the document
                 
                 results["medications_validated"].append(med)
             else:
@@ -624,21 +649,74 @@ class PDFChartParser:
             if lab_date:
                 # Check if this exact date appears in source (check multiple formats)
                 date_found = False
-                # Try exact match
-                if lab_date.lower() in source_lower:
+                lab_date_lower = lab_date.lower()
+                date_variants = [lab_date_lower]
+                
+                # Try exact match first
+                if lab_date_lower in source_lower:
                     date_found = True
                 else:
-                    # Try without leading zeros (06/15/26 -> 6/15/26)
-                    alt_date = lab_date.replace("/0", "/").lstrip("0")
-                    if alt_date in source_lower:
-                        date_found = True
+                    # Build date format variants to check
+                    # Without leading zeros (06/15/26 -> 6/15/26)
+                    alt_date = lab_date.replace("/0", "/").lstrip("0").lower()
+                    date_variants.append(alt_date)
+                    
+                    # 2-digit year to 4-digit (06/15/26 -> 06/15/2026)
+                    if re.match(r'\d{1,2}/\d{1,2}/\d{2}$', lab_date):
+                        parts = lab_date.split('/')
+                        year_4digit = f"{parts[0]}/{parts[1]}/20{parts[2]}"
+                        date_variants.append(year_4digit.lower())
+                    
+                    # 4-digit year to 2-digit (06/15/2026 -> 06/15/26)
+                    if re.match(r'\d{1,2}/\d{1,2}/\d{4}$', lab_date):
+                        parts = lab_date.split('/')
+                        year_2digit = f"{parts[0]}/{parts[1]}/{parts[2][2:]}"
+                        date_variants.append(year_2digit.lower())
+                    
+                    # Dash format (06-15-26)
+                    date_variants.append(lab_date.replace("/", "-").lower())
+                    
+                    for variant in date_variants:
+                        if variant in source_lower:
+                            date_found = True
+                            break
                 
                 if not date_found:
-                    logger.warning(f"Lab date NOT in source: {lab_date} for {lab_name}={lab_value} - likely fabricated")
-                    date_valid = False
-                    results["lab_results_flagged"].append(lab)
-                    results["details"].append(f"Lab date fabricated: {lab_date} not in source")
-                    continue  # Skip this lab entirely
+                    # Try to find an actual date near the lab name in source
+                    name_idx = source_lower.find(lab_name)
+                    if name_idx < 0 and '/' in lab_name:
+                        name_idx = source_lower.find(lab_name.split('/')[0].strip())
+                    if name_idx < 0 and ' ' in lab_name:
+                        name_idx = source_lower.find(lab_name.split()[0].strip())
+                    
+                    if name_idx >= 0:
+                        # Search for a date pattern near the lab name
+                        context_start = max(0, name_idx - 150)
+                        context_end = min(len(source_text), name_idx + 300)
+                        context = source_text[context_start:context_end]
+                        
+                        # Look for date patterns like 06/14/26 or 06/14/2026
+                        date_pattern = r'(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})'
+                        date_matches = re.findall(date_pattern, context)
+                        if date_matches:
+                            # Use the first date found near the lab
+                            actual_date = date_matches[0].replace('-', '/')
+                            logger.warning(f"Lab date CORRECTED: {lab_name} {lab_date} -> {actual_date} (source date)")
+                            lab["date"] = actual_date
+                            lab["date_corrected"] = True
+                            date_valid = True
+                        else:
+                            logger.warning(f"Lab date NOT in source: {lab_date} for {lab_name}={lab_value} - likely fabricated. Checked variants: {date_variants[:3]}")
+                            date_valid = False
+                            results["lab_results_flagged"].append(lab)
+                            results["details"].append(f"Lab date fabricated: {lab_date} not in source")
+                            continue  # Skip this lab entirely
+                    else:
+                        logger.warning(f"Lab date NOT in source: {lab_date} for {lab_name}={lab_value} - likely fabricated. Checked variants: {date_variants[:3]}")
+                        date_valid = False
+                        results["lab_results_flagged"].append(lab)
+                        results["details"].append(f"Lab date fabricated: {lab_date} not in source")
+                        continue  # Skip this lab entirely
             
             # For numeric values, be STRICT - require name and value to appear together
             # This prevents "4.5" in "take 4.5mg metformin" from validating a fabricated lab
@@ -687,9 +765,39 @@ class PDFChartParser:
                     logger.info(f"Lab VALIDATED: {lab_name}={lab_value} (found together in source)")
                     results["lab_results_validated"].append(lab)
                 else:
-                    logger.warning(f"Lab FLAGGED: {lab_name}={lab_value} (NOT found together in source)")
-                    results["lab_results_flagged"].append(lab)
-                    results["details"].append(f"Lab value not found with name in source: {lab_name}={lab_value} (possible hallucination)")
+                    # Value not found - try to find the ACTUAL value near the lab name
+                    # Search for lab name and extract nearby numeric value
+                    name_idx = source_lower.find(lab_name)
+                    if name_idx < 0 and '/' in lab_name:
+                        name_idx = source_lower.find(lab_name.split('/')[0].strip())
+                    if name_idx < 0 and ' ' in lab_name:
+                        name_idx = source_lower.find(lab_name.split()[0].strip())
+                    
+                    if name_idx >= 0:
+                        # Get context around the lab name
+                        context_start = max(0, name_idx - 20)
+                        context_end = min(len(source_text), name_idx + 100)
+                        context = source_text[context_start:context_end]
+                        
+                        # Look for numeric value after the lab name
+                        value_match = re.search(r'[\s:]\s*(\d+\.?\d*)\s*(?:[KkMmGg/]|$|\s)', context)
+                        if value_match:
+                            actual_value = value_match.group(1)
+                            if actual_value != lab_value:
+                                logger.warning(f"Lab value CORRECTED: {lab_name} {lab_value} -> {actual_value} (source value)")
+                                lab["value"] = actual_value
+                                lab["value_corrected"] = True
+                                results["lab_results_validated"].append(lab)
+                            else:
+                                results["lab_results_validated"].append(lab)
+                        else:
+                            logger.warning(f"Lab FLAGGED: {lab_name}={lab_value} (NOT found together in source)")
+                            results["lab_results_flagged"].append(lab)
+                            results["details"].append(f"Lab value not found with name in source: {lab_name}={lab_value} (possible hallucination)")
+                    else:
+                        logger.warning(f"Lab FLAGGED: {lab_name}={lab_value} (lab name not in source)")
+                        results["lab_results_flagged"].append(lab)
+                        results["details"].append(f"Lab value not found with name in source: {lab_name}={lab_value} (possible hallucination)")
             elif is_numeric:
                 # Numeric but no name - flag it (can't verify without name)
                 results["lab_results_flagged"].append(lab)
@@ -747,6 +855,18 @@ class PDFChartParser:
             # Common dramatic additions
             "unresponsive", "altered mental status", "ams", "encephalopathy",
             "icu admission", "transferred to icu", "critical care",
+            # Substance abuse - frequently fabricated
+            "amphetamine abuse", "cocaine abuse", "opioid abuse", "heroin abuse",
+            "methamphetamine abuse", "alcohol abuse", "substance abuse",
+            "drug abuse", "iv drug use", "ivdu", "injection drug use",
+            "opioid use disorder", "alcohol use disorder", "substance use disorder",
+            # Psychiatric - often invented
+            "suicidal ideation", "homicidal ideation", "psychosis", "psychotic",
+            "schizophrenia", "bipolar disorder", "schizoaffective",
+            # Kidney disease - often invented or embellished
+            "ckd stage 3b", "ckd stage 3a", "ckd stage 4", "ckd stage 5",
+            "acute kidney injury on ckd", "aki on ckd", "aki on chronic kidney disease",
+            "chronic kidney disease stage",
         ]
         
         hook_lower = hook_components.lower()
@@ -927,11 +1047,13 @@ You are extracting data from a REAL PATIENT'S medical chart. This data will be u
 RULES YOU MUST FOLLOW:
 1. You are a DATA COPIER, not a writer. Copy EXACTLY what you see. Do NOT paraphrase, translate, or "improve" anything.
 2. If you cannot find a value in the source text, return EMPTY STRING. Do NOT guess or infer.
-3. If a date shows "06/15/26" in the source, you write "06/15/26" - NOT "06/18/26", NOT any other date.
+3. If a date shows "06/14/26" in the source, you write "06/14/26" - NOT "06/15/26", NOT "06/18/26", NOT any other date.
 4. If a dose shows "50 mg", you write "50 mg" - NOT "25 mg", NOT "100 mg".
 5. If a frequency shows "every 6 hours as needed", you write "every 6 hours as needed" - NOT "BID", NOT "Q6H PRN".
 6. If age shows "70-year-old", you write "70-year-old" - NOT "78-year-old".
 7. Do NOT invent lab values. If you don't see "ALBUMIN 2.9" in the source, do NOT output it.
+8. LAB VALUES ARE CRITICAL: If source shows WBC 17.0, you write 17.0 - NOT 16.7, NOT 17.1, NOT any rounded/modified number.
+9. FOR PMH_RELEVANT: EXCLUDE substance abuse, psychiatric history, social factors - these don't strengthen Medicare appeals. INCLUDE only conditions that explain medical necessity: CKD, diabetes, heart failure, COPD, etc.
 
 YOUR OUTPUT WILL BE VERIFIED. Every value you return will be checked against the source document. Fabrications will be flagged and removed.
 
@@ -950,16 +1072,16 @@ Now extract clinical data from this patient chart. Return JSON with these fields
     "observation_date": "date patient was on observation status - usually first day (MM/DD/YYYY or null if not mentioned)",
     "inpatient_date": "date patient transitioned to inpatient status - usually day after observation (MM/DD/YYYY or null if not mentioned)",
     "discharge_date": "date patient was discharged (MM/DD/YYYY) - look for DISCHARGE DATE/TIME field. If no discharge date found or patient is still admitted, use null",
-    "presenting_symptom": "ACUTE symptom(s) from CHIEF COMPLAINT. Extract the NEW/WORSENING symptoms that brought patient in. 3-15 words max. Example: 'right lower extremity pain, worsening tremors'. Do NOT include chronic history here - only acute complaints.",
-    "pmh_relevant": "LIMIT TO 1-3 MOST RELEVANT items. Extract from CHIEF COMPLAINT and PAST MEDICAL HISTORY: (1) The 1-2 chronic conditions MOST pertinent to this admission (e.g., 'Parkinson's disease'), (2) Recent medication changes if documented (e.g., 'gabapentin switched to Lyrica'), (3) Comparison to baseline if stated (e.g., 'symptoms worse than normal'). PRIORITIZE relevance over completeness - do NOT list every PMH condition, only those directly related to the presenting symptom. Example: 'Parkinson's disease, recent medication changes; tremors worse than baseline'. If no relevant PMH, use empty string.",
+    "presenting_symptom": "ACUTE findings from Chief Complaint, HPI, and labs. Include: (1) Symptoms (nausea, vomiting, pain), (2) ACUTE diagnoses (AKI, acute kidney injury, sepsis). For this patient with GI symptoms: 'nausea/vomiting, epigastric pain, acute kidney injury'. Do NOT include chronic PMH conditions here - those go in pmh_relevant. 10-20 words.",
+    "pmh_relevant": "CHRONIC conditions from PAST MEDICAL HISTORY only - NOT acute diagnoses. Example: 'CKD stage 3b' (chronic) goes here. 'AKI' or 'acute kidney injury' (acute) does NOT go here - it goes in presenting_symptom. 1-2 chronic conditions that complicate the acute presentation. If patient has AKI on CKD: put 'acute kidney injury' in presenting_symptom, put 'CKD stage 3b' in pmh_relevant. NEVER duplicate - if CKD is here, don't mention CKD in presenting_symptom.",
     "chief_complaint_short": "Brief symptom list from Chief Complaint section (3-8 words): 'worsening leg pain and tremors'",
     "hpi": "Copy VERBATIM from HPI section - do NOT paraphrase, do NOT change ages, do NOT add details. If HPI says '70-year-old', write '70-year-old' NOT '78-year-old'. Copy exactly 2-4 sentences.",
     "conditions": ["CHRONIC DISEASES ONLY from PAST MEDICAL HISTORY section. Extract EXACTLY as written. Do NOT include acute symptoms."],
     "medications": [
-        {{"name": "ONLY drug names explicitly listed in MEDICATION or MAR sections - do NOT infer medications from treatment descriptions", "dose": "Copy VERBATIM - if source says '50 mg', write '50 mg' not '25 mg'. NEVER change doses.", "route": "PO/IV/etc or empty string if not listed", "frequency": "Copy VERBATIM - if source says 'every 6 hours as needed', write 'every 6 hours as needed' NOT 'BID'. If source says 'TID', write 'TID'. NEVER translate or change frequency."}}
+        {{"name": "ONLY drug names explicitly listed in MEDICATION or MAR sections", "dose": "Extract the NUMERIC dose (e.g., '20mg', '125mcg', '100mg') - NOT '1tablet' or '1cap'. If source shows 'escitalopram 20mg', write '20mg'. Look for mg, mcg, mL values.", "route": "PO/IV/etc or empty string if not listed", "frequency": "Copy VERBATIM - TID, BID, QD, Q6H, PRN, AT BEDTIME, etc."}}
     ],
     "lab_results": [
-        {{"name": "test name", "value": "Copy VERBATIM the EXACT numeric value from the lab table - do NOT round, estimate, or modify. If WBC shows 7.6, write 7.6 not 8.2", "unit": "unit", "date": "Copy VERBATIM the date shown in the lab table. If no date visible for this lab, leave EMPTY. NEVER fabricate a date.", "flag": "'H' if value is HIGH/elevated (above normal range or flagged), 'L' if LOW (below normal range or flagged), otherwise BLANK"}}
+        {{"name": "test name", "value": "COPY THE EXACT NUMBER - if source shows 17.0, write 17.0 NOT 16.7. Character-for-character copy.", "unit": "unit", "date": "COPY THE EXACT DATE - if source shows 06/14/26, write 06/14/26 NOT 06/15/26. Character-for-character copy.", "flag": "'H' if value is HIGH/elevated (above normal range or flagged), 'L' if LOW (below normal range or flagged), otherwise BLANK"}}
     ],
     "vitals": {{
         "bp": "ONLY if documented (e.g. '120/80') - leave empty string if not in chart",
@@ -996,17 +1118,21 @@ CRITICAL INSTRUCTIONS:
 - LAB FLAGS: Mark 'H' for HIGH/elevated values and 'L' for LOW values when ANY flag indicator is present - including 'H', 'L', 'HIGH', 'LOW', '*', '!', or abnormal indicators. Use clinical judgment: if a value is marked abnormal and is above normal range → 'H'; if below normal range → 'L'. ALWAYS include flags for clearly abnormal values like: hemoglobin <12, glucose >140, sodium <135 or >145, creatinine >1.2, eGFR <60.
 - CONDITIONS: Extract ONLY from PAST MEDICAL HISTORY section, not from narrative or assessment.
 - PLACE OF SERVICE: Determine based on HOW patient arrived, not current unit. If transported by EMS/ambulance → "Emergency Department". If walked in or direct admit → "Hospital". The SERVICE code (MED, SURG, etc.) shows current unit, not arrival point.
-- PRESENTING SYMPTOM / PMH:
-  - presenting_symptom: Extract ACUTE symptoms from CHIEF COMPLAINT - the NEW or WORSENING complaints. Example: "right lower extremity pain, worsening tremors". Do NOT include chronic history here.
-  - pmh_relevant: LIMIT TO 1-3 ITEMS TOTAL. Prioritize relevance over completeness:
-    * 1-2 chronic conditions MOST relevant to this admission (e.g., "Parkinson's disease") - NOT every PMH condition
-    * Recent medication changes if documented (e.g., "gabapentin switched to Lyrica")
-    * Comparison to baseline if stated (e.g., "tremors worse than baseline")
-    GOOD: "Parkinson's disease, gabapentin switched to Lyrica; tremors worse than baseline"
-    BAD: "Parkinson's disease, chronic low back pain, restless legs, iron deficiency anemia, osteoarthritis" (too many - pick 1-2 most relevant)
+- PRESENTING SYMPTOM / PMH - NO DUPLICATION ALLOWED:
+  - presenting_symptom: ACUTE findings - symptoms + ACUTE diagnoses
+    * Symptoms: nausea, vomiting, pain, fall
+    * ACUTE diagnoses: AKI (acute kidney injury), sepsis, pneumonia
+    * Example: "nausea/vomiting with epigastric pain and acute kidney injury"
+  - pmh_relevant: CHRONIC conditions from PMH ONLY
+    * CKD stage 3b (chronic) → goes HERE
+    * AKI (acute) → does NOT go here
+    * NEVER DUPLICATE: if pmh_relevant has "CKD", do NOT put kidney-related terms in presenting_symptom
+    Example for AKI on CKD patient:
+      presenting_symptom: "nausea/vomiting with epigastric pain and acute kidney injury"
+      pmh_relevant: "CKD stage 3b"
   - The hook will be assembled as: "{{presenting_symptom}} with {{pmh_relevant}}, requiring hospital-level evaluation..."
   - Do NOT include patient demographics, age, gender in these fields
-  - Do NOT use markdown, asterisks, or any special formatting. Output plain text only.
+- MEDICATIONS: Extract NUMERIC doses (20mg, 125mcg, 100mg), NOT "1tablet" or "1cap".
   
   FAITHFULNESS RULES:
   - ONLY include symptoms, findings, and treatments EXPLICITLY documented in the chart text
@@ -1018,7 +1144,7 @@ CRITICAL INSTRUCTIONS:
 - ONLY include information explicitly stated in the chart - do NOT infer or make up findings
 - Do NOT add clinical findings like tachycardia, fever, hypotension unless explicitly documented with values
 - Extract conditions EXACTLY as written in PAST MEDICAL HISTORY
-- MEDICATIONS: ONLY extract medications whose drug names are EXPLICITLY listed in the chart (e.g., in a MEDICATIONS, MAR, or ORDERS section). Do NOT infer medications from treatment descriptions like "IV fluids" or "antibiotics" - only extract if the specific drug name appears (e.g., "Lactated Ringers", "Vancomycin"). If no medication list is visible, return an empty array.
+- MEDICATIONS: Extract NUMERIC doses like "20mg", "125mcg", "100mg" - NOT "1tablet" or "1cap". Look at the full medication line for the mg/mcg value. Example: "escitalopram 20mg 1tablet daily" → dose is "20mg", not "1tablet". ONLY extract medications whose drug names are EXPLICITLY listed in the chart. Do NOT infer medications from treatment descriptions. If no medication list is visible, return an empty array.
 - VITALS: Only extract vitals if you see actual numeric values (e.g., "BP 120/80"). Do NOT fabricate normal values.
 - HPI: Copy text VERBATIM from the chart. Do NOT rephrase or add details not present.
 
@@ -1029,9 +1155,10 @@ If the answer is NO, DELETE THAT FIELD VALUE and leave it empty.
 Check each field:
 1. LAB VALUES: Can I point to where I see this exact number in the source? (If no → delete)
 2. LAB DATES: Can I point to where I see this exact date in the source? (If no → delete)
-3. MEDICATION DOSES: Can I point to where I see this exact dose in the source? (If no → delete)
+3. MEDICATION DOSES: Is this the NUMERIC dose (20mg, 125mcg) not "1tablet"? (If "1tablet" → find the mg dose)
 4. MEDICATION FREQUENCIES: Can I point to where I see this exact frequency in the source? (If no → delete)
 5. HPI: Did I copy this VERBATIM or did I change words/numbers? (If changed → copy verbatim instead)
+6. PMH_RELEVANT: Is this condition ACTUALLY in the PMH section? (If not found → leave EMPTY)
 
 REMEMBER: This is a patient's medical record. Fabrication is unacceptable.
 Empty fields are safe. Fabricated fields are dangerous.
@@ -1120,6 +1247,13 @@ Return ONLY valid JSON, no other text."""
                         "medications_flagged": len(faithfulness_result["medications_flagged"]),
                     }
                 )
+                
+                # Store trace ID for later score fetching
+                try:
+                    self._last_trace_ids["pdf_extractor"] = langfuse_trace.id
+                except:
+                    pass  # Langfuse SDK version may vary
+                
                 langfuse_trace.generation(
                     name="extract-clinical-data",
                     model=self.model_id,
@@ -1867,6 +2001,12 @@ Return ONLY valid JSON, no other text."""
                     "component": "hook"
                 }
             )
+            
+            # Store trace ID for later score fetching
+            try:
+                self._last_trace_ids["hook"] = trace.id
+            except:
+                pass  # Langfuse SDK version may vary
             
             # Create generation for hook evaluator - also plain string
             generation = trace.generation(

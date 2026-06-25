@@ -337,6 +337,7 @@ class MidnightReasonGenerator:
         self._last_closing_summary = ""
         self._last_generation_timestamp = None
         self._last_validation_result = {}
+        self._last_trace_ids = {}  # Store trace IDs for Langfuse score fetching
     
     def _get_bedrock_client(self):
         """Create a fresh Bedrock client to pick up refreshed credentials."""
@@ -356,6 +357,8 @@ class MidnightReasonGenerator:
             - generated_text: Full generated midnight reason text
             - conditions_used: Conditions mentioned in output that were in input
             - conditions_hallucinated: Conditions mentioned in output NOT in input
+            - medications_used: Medications mentioned in output that were in input
+            - medications_hallucinated: Medications mentioned in output NOT in input
             - generation_timestamp: ISO timestamp
         """
         return {
@@ -368,8 +371,11 @@ class MidnightReasonGenerator:
             "closing_summary": self._last_closing_summary,
             "conditions_used": self._last_validation_result.get("conditions_used", []),
             "conditions_hallucinated": self._last_validation_result.get("conditions_hallucinated", []),
+            "medications_used": self._last_validation_result.get("medications_used", []),
+            "medications_hallucinated": self._last_validation_result.get("medications_hallucinated", []),
             "flow_issues": self._last_validation_result.get("flow_issues", []),
             "generation_timestamp": self._last_generation_timestamp,
+            "trace_ids": self._last_trace_ids,  # Langfuse trace IDs for score fetching
             "source": "midnight-reason-generator"
         }
     
@@ -463,9 +469,67 @@ class MidnightReasonGenerator:
                 flow_issues.append(f"Repeated word: '{words[i]}'")
                 break
         
+        # MEDICATION VALIDATION - Check for hallucinated medications
+        # Common medications that if mentioned should be in the input
+        common_medications = [
+            # Dopamine agonists (Parkinson's)
+            "ropinirole", "pramipexole", "rotigotine", "apomorphine",
+            # Levodopa combinations
+            "sinemet", "carbidopa", "levodopa",
+            # Parkinson's adjuncts
+            "amantadine", "entacapone", "rasagiline", "selegiline",
+            # Common IV antibiotics
+            "vancomycin", "ceftriaxone", "cefepime", "piperacillin", "meropenem", "ciprofloxacin", "levofloxacin",
+            # Anticoagulants
+            "heparin", "enoxaparin", "lovenox", "warfarin", "apixaban", "rivaroxaban", "dabigatran",
+            # Diuretics
+            "furosemide", "lasix", "bumetanide", "torsemide", "metolazone", "spironolactone",
+            # Cardiac
+            "metoprolol", "carvedilol", "lisinopril", "amlodipine", "hydralazine", "digoxin", "amiodarone",
+            # Pain
+            "morphine", "hydromorphone", "fentanyl", "oxycodone", "tramadol", "gabapentin", "pregabalin", "lyrica",
+            # Insulin
+            "insulin", "glargine", "aspart", "lispro", "nph",
+            # Steroids
+            "prednisone", "methylprednisolone", "dexamethasone", "hydrocortisone",
+            # Psych
+            "clonazepam", "lorazepam", "diazepam", "alprazolam", "sertraline", "fluoxetine", "quetiapine", "olanzapine",
+            # Other common
+            "acetaminophen", "pantoprazole", "omeprazole", "ondansetron", "metformin"
+        ]
+        
+        medications_used = []
+        medications_hallucinated = []
+        
+        # Build normalized input medications set
+        input_meds_lower = set()
+        for med in input_medications:
+            med_lower = med.lower()
+            input_meds_lower.add(med_lower)
+            # Also add without common suffixes/prefixes
+            for suffix in [" tab", " tablet", " cap", " capsule", " inj", " injection", " solution"]:
+                if suffix in med_lower:
+                    input_meds_lower.add(med_lower.replace(suffix, "").strip())
+        
+        for med in common_medications:
+            if med in generated_lower:
+                # Check if this medication is in input
+                found_in_input = False
+                for input_med in input_meds_lower:
+                    if med in input_med or input_med in med:
+                        found_in_input = True
+                        break
+                
+                if found_in_input:
+                    medications_used.append(med)
+                else:
+                    medications_hallucinated.append(med)
+        
         return {
             "conditions_used": list(set(conditions_used)),
             "conditions_hallucinated": list(set(conditions_hallucinated)),
+            "medications_used": list(set(medications_used)),
+            "medications_hallucinated": list(set(medications_hallucinated)),
             "flow_issues": flow_issues
         }
     
@@ -604,6 +668,12 @@ class MidnightReasonGenerator:
                             "component_name": comp_name
                         }
                     )
+                    
+                    # Store trace ID for later score fetching
+                    try:
+                        self._last_trace_ids[comp_id] = comp_trace.id
+                    except:
+                        pass  # Langfuse SDK version may vary
                     
                     # Also add a generation under this trace
                     generation = comp_trace.generation(
@@ -806,12 +876,9 @@ Your task is to generate three components for a Medicare inpatient appeal letter
 
 3. **MidnightReason2** (Second Midnight): Generate content that completes the sentence "During the second midnight, the member still required hospital-level care due to..."
    - DO NOT start with "During the second midnight" - the template adds this prefix
-   - Show PROGRESSION from first midnight (continued, persistent, worsening, pending results)
-   - Continued medications with routes (IV antibiotics, PO diuretics, etc.)
-   - Serial labs showing trends if available
-   - Therapy evaluations (PT evaluation, OT evaluation)
-   - Consultations (cardiology, nephrology, etc.)
-   - Discharge planning complexity (Case Management, Social Work engagement)
+   - KEEP IT SHORT: 2-3 sentences, ~80-100 words maximum. Avoid listing every medication.
+   - Show PROGRESSION from first midnight (continued, persistent, improving)
+   - Mention 1-2 key ongoing treatments (not every medication)
    - MUST end with '...and inability to safely transition to a lower level of care because [specific clinical reason].'
 
 4. **Closing Summary**: A brief closing paragraph about the patient's current status:
@@ -826,6 +893,7 @@ CRITICAL FORMATTING - MANDATORY SENTENCE ENDINGS:
   WRONG: "...need for continuous respiratory monitoring and inpatient-level bronchodilator therapy."
   WRONG: Any ending that does not contain the exact phrase "remained unsafe for discharge due to"
 - MidnightReason2 must NOT start with 'During the second midnight' - the template adds this prefix
+- MidnightReason2 should be SHORT (2-3 sentences, ~80-100 words) - do not list every medication
 - MidnightReason2 FINAL SENTENCE MUST literally end with '...and inability to safely transition to a lower level of care because [specific reason].'
   CORRECT: "...and inability to safely transition to a lower level of care because of persistent oxygen requirements."
   WRONG: Any ending that does not contain the exact phrase "inability to safely transition to a lower level of care because"
@@ -840,6 +908,12 @@ TONE - AVOID SENSATIONALIZED LANGUAGE:
 - Medicare reviewers are physicians - overly dramatic language undermines credibility
 
 Use formal medical language appropriate for Medicare appeals. Reference specific lab values, medication names, and clinical findings.
+
+SUBSTANCE ABUSE / PSYCHIATRIC HISTORY - DO NOT EMPHASIZE:
+- Substance abuse history (drug abuse, alcohol abuse, amphetamine abuse) does NOT strengthen Medicare appeals
+- Do NOT focus on substance use history - it does not justify medical necessity
+- Do NOT say substance abuse "necessitated monitoring" or "required continued management"
+- Focus instead on: acute medical conditions, abnormal labs, IV medications, procedures
 
 Output Format (JSON):
 {
@@ -871,14 +945,20 @@ FAITHFULNESS - YOU MAY ONLY USE:
 - If a medication class is implied by chief complaint but not in MEDICATIONS list, use hedging: "pain management as clinically indicated" NOT "IV opioids"
 - If a condition is not in the list, do NOT mention it even if it seems clinically related
 
-CLINICAL INFERENCES - LABEL THEM CLEARLY:
-- If lab values suggest a condition not explicitly diagnosed (e.g., elevated creatinine in CKD patient suggesting acute worsening), use hedging language:
+CLINICAL INFERENCES - STRICT RULES (DO NOT INFER DIAGNOSES):
+- Do NOT infer diagnoses from labs or medications:
+  * Elevated creatinine + CKD does NOT = "acute kidney injury" unless AKI is explicitly in CONDITIONS
+  * Leukocytosis does NOT = "infection" or "UTI" unless explicitly documented in CONDITIONS
+  * Midodrine use does NOT = "hypotension" unless hypotension is in CONDITIONS
+  * Abnormal vitals does NOT = "sepsis" unless sepsis is in CONDITIONS
+  * Antibiotic use does NOT = "infection" unless the specific infection is in CONDITIONS
+- If lab values suggest a condition not explicitly diagnosed, use hedging language:
   - "findings consistent with [condition]"
   - "laboratory values suggestive of [condition]"
   - "creatinine elevation concerning for acute-on-chronic kidney injury"
 - Do NOT state inferred diagnoses as documented facts
 - Let the physician reviewer make the final clinical determination
-- Example: Say "CKD stage 3 with creatinine 2.8 mg/dL, findings consistent with acute exacerbation" NOT "acute on chronic kidney injury"
+- Example: Say "CKD stage 3 with creatinine 2.8 mg/dL" NOT "acute kidney injury"
 
 REQUIRED LANGUAGE:
 - Include "medically necessary" somewhere in midnight_reason_1
@@ -886,8 +966,13 @@ REQUIRED LANGUAGE:
 
 Generate COMPLETE paragraphs - these will be used directly in the appeal letter.
 
-If specific data is not available (like medications or imaging), use clinically reasonable language to indicate what would typically be required for the documented conditions.
-For conditions like pneumonia, assume appropriate IV antibiotics. For pain, assume appropriate analgesia.
+CRITICAL ANTI-HALLUCINATION RULES:
+- DO NOT invent or assume medications that are not in the MEDICATIONS list
+- If you know a medication is typically used for a condition (e.g., ropinirole for Parkinson's) but it's NOT in the MEDICATIONS list, DO NOT MENTION IT
+- Only name medications that explicitly appear in the provided data
+- If medication data is sparse, describe generic treatment: "pharmacological management" or "continued medical therapy" - NOT specific drug names
+- DO NOT add medications based on clinical inference - even if it seems medically appropriate
+
 Follow the format and style of formal Medicare appeal letters."""
 
         # Create patient context for Langfuse faithfulness evaluation
@@ -994,19 +1079,20 @@ Your task is to generate three components for a Medicare inpatient appeal letter
    - Monitoring: telemetry, serial labs
    - End with '...and remained unsafe for discharge due to [specific clinical reason].'
 
-3. **MidnightReason2** (Second Midnight): Generate content that COMPLETES the sentence "During the second midnight, the member still required hospital-level care due to..." - DO NOT include this prefix yourself, the template adds it. Your output should start directly with the condition/reason. Include:
-   - Show PROGRESSION from Day 1 (continued, persistent, pending results, worsening/improving)
-   - Continued medications with routes: "continuation of IV Ceftriaxone for [organism]", "PO diuretics"
-   - Serial labs showing trends if available
-   - Required consultations: "Cardiology consultation for elevated troponin and CHF, Nephrology consideration for AKI"
-   - PT/OT evaluations with clinical context: "PT/OT evaluations for 3-week progressive weakness and high fall risk"
-   - Discharge complexity: "Case Management and Social Work actively engaged in coordinating complex discharge plan due to [specific barriers]"
+3. **MidnightReason2** (Second Midnight): Generate content that COMPLETES the sentence "During the second midnight, the member still required hospital-level care due to..." - DO NOT include this prefix yourself, the template adds it.
+   - KEEP IT SHORT: 2-3 sentences, ~80-100 words maximum
+   - Show PROGRESSION from Day 1 (continued, persistent, improving)
+   - Mention 1-2 key ongoing treatments (not every medication)
    - End with '...and inability to safely transition to a lower level of care because [specific clinical reason].'
 
 4. **Closing Summary**: Generate a COMPLETE closing sentence:
    - MUST start with "In summary, the patient required continued inpatient hospitalization through the denied period for..."
-   - Include the primary conditions being treated
-   - Include key ongoing treatments (IV antibiotics, pain control, PT/OT, etc.)
+   - MUST reference the CHIEF COMPLAINT as the primary reason for hospitalization
+   - Include ONLY conditions explicitly listed in the CONDITIONS section - do NOT infer diagnoses
+   - Do NOT say "acute kidney injury" unless "acute kidney injury" or "AKI" appears in CONDITIONS - saying "CKD" does NOT mean you can say AKI
+   - Do NOT say "UTI" or "urinary tract infection" unless it appears in CONDITIONS - leukocytosis does NOT mean UTI
+   - Do NOT say "hypotension" unless it appears in CONDITIONS - midodrine use does NOT mean you can claim hypotension
+   - Include key ongoing treatments (IV antibiotics, pain control, PT/OT, etc.) - but only treatments documented in MEDICATIONS
    - MUST end with "...and the inpatient stay should be approved as medically necessary."
    - Should be 1-2 sentences maximum
 
@@ -1016,6 +1102,7 @@ CRITICAL FORMATTING - MANDATORY SENTENCE ENDINGS:
   CORRECT: "...and remained unsafe for discharge due to ongoing hemodynamic instability."
   WRONG: "...need for continuous respiratory monitoring and inpatient-level bronchodilator therapy."
 - MidnightReason2 must NOT start with 'During the second midnight' - the template adds this prefix
+- MidnightReason2 should be SHORT (2-3 sentences, ~80-100 words) - do not list every medication
 - MidnightReason2 FINAL SENTENCE MUST literally end with '...and inability to safely transition to a lower level of care because [specific reason].'
   CORRECT: "...and inability to safely transition to a lower level of care because of persistent oxygen requirements."
 - Closing Summary MUST start with "In summary, the patient required continued inpatient hospitalization through the denied period for..."
@@ -1046,6 +1133,12 @@ TONE - AVOID SENSATIONALIZED LANGUAGE:
 - Say "neurological monitoring" NOT "monitoring for rapid progression"
 - Medicare reviewers are physicians - overly dramatic language undermines credibility
 
+SUBSTANCE ABUSE / PSYCHIATRIC HISTORY - DO NOT EMPHASIZE:
+- Substance abuse history (drug abuse, alcohol abuse, amphetamine abuse) does NOT strengthen Medicare appeals
+- Do NOT focus on substance use history - it does not justify medical necessity
+- Do NOT say substance abuse "necessitated monitoring" or "required continued management"
+- Focus instead on: acute medical conditions, abnormal labs, IV medications, procedures
+
 Output Format (JSON):
 {
     "patient_background": "...",
@@ -1068,7 +1161,13 @@ CRITICAL FORMATTING RULES:
 - midnight_reason_2 should show PROGRESSION from Day 1 (continued, persistent, pending results, worsening/improving)
 - closing_summary MUST start with "In summary, the patient required continued inpatient hospitalization through the denied period for..."
 - closing_summary MUST end with "...and the inpatient stay should be approved as medically necessary."
+- closing_summary MUST reference the CHIEF COMPLAINT (the reason patient came to hospital) - do not omit it
 - closing_summary SHOULD include: key procedures performed (e.g., wound debridement), abnormal lab values supporting severity (e.g., elevated CRP/ESR for infection), and significant comorbidities that complicate care
+- closing_summary must ONLY use conditions from the CONDITIONS list - NO INFERRED DIAGNOSES:
+  * Do NOT say "acute kidney injury" unless AKI is in CONDITIONS - CKD alone does NOT imply AKI
+  * Do NOT say "UTI" or "infection" unless explicitly in CONDITIONS - leukocytosis does NOT mean infection
+  * Do NOT say "hypotension" unless in CONDITIONS - medication use does NOT imply the condition
+  * Do NOT say "sepsis" unless in CONDITIONS - abnormal vitals/labs do NOT mean sepsis
 - DO NOT end midnight paragraphs with generic phrases about "need for monitoring" or "inpatient-level therapy" - use the EXACT required endings above
 
 FAITHFULNESS - YOU MAY ONLY USE:
@@ -1080,14 +1179,20 @@ FAITHFULNESS - YOU MAY ONLY USE:
 - If a medication class is implied by chief complaint but not in MEDICATIONS list, use hedging: "pain management as clinically indicated" NOT "IV opioids"
 - If a condition is not in the list, do NOT mention it even if it seems clinically related
 
-CLINICAL INFERENCES - LABEL THEM CLEARLY:
-- If lab values suggest a condition not explicitly diagnosed (e.g., elevated creatinine in CKD patient suggesting acute worsening), use hedging language:
+CLINICAL INFERENCES - STRICT RULES (DO NOT INFER DIAGNOSES):
+- Do NOT infer diagnoses from labs or medications:
+  * Elevated creatinine + CKD does NOT = "acute kidney injury" unless AKI is explicitly in CONDITIONS
+  * Leukocytosis does NOT = "infection" or "UTI" unless explicitly documented in CONDITIONS
+  * Midodrine use does NOT = "hypotension" unless hypotension is in CONDITIONS
+  * Abnormal vitals does NOT = "sepsis" unless sepsis is in CONDITIONS
+  * Antibiotic use does NOT = "infection" unless the specific infection is in CONDITIONS
+- If lab values suggest a condition not explicitly diagnosed, use hedging language:
   - "findings consistent with [condition]"
   - "laboratory values suggestive of [condition]"
   - "creatinine elevation concerning for acute-on-chronic kidney injury"
 - Do NOT state inferred diagnoses as documented facts
 - Let the physician reviewer make the final clinical determination
-- Example: Say "CKD stage 3 with creatinine 2.8 mg/dL, findings consistent with acute exacerbation" NOT "acute on chronic kidney injury"
+- Example: Say "CKD stage 3 with creatinine 2.8 mg/dL" NOT "acute kidney injury"
 
 REQUIRED LANGUAGE:
 - Include "medically necessary" somewhere in midnight_reason_1
@@ -1095,7 +1200,13 @@ REQUIRED LANGUAGE:
 
 Generate COMPLETE paragraphs - these will be used directly in the appeal letter.
 
-If specific data is not available (like medications or imaging), use clinically reasonable language to indicate what would typically be required for the documented conditions.
+CRITICAL ANTI-HALLUCINATION RULES:
+- DO NOT invent or assume medications that are not in the MEDICATIONS list
+- If you know a medication is typically used for a condition (e.g., ropinirole for Parkinson's) but it's NOT in the MEDICATIONS list, DO NOT MENTION IT
+- Only name medications that explicitly appear in the provided data
+- If medication data is sparse, describe generic treatment: "pharmacological management" or "continued medical therapy" - NOT specific drug names
+- DO NOT add medications based on clinical inference - even if it seems medically appropriate
+
 Follow the format and style of formal Medicare appeal letters."""
 
         # Create patient context for Langfuse faithfulness evaluation
@@ -1194,6 +1305,11 @@ Follow the format and style of formal Medicare appeal letters."""
         flow_issues = self._last_validation_result.get("flow_issues", [])
         if flow_issues:
             logger.warning(f"FLOW QUALITY ISSUES DETECTED: {flow_issues}")
+        
+        # Log hallucinated medications prominently
+        meds_hallucinated = self._last_validation_result.get("medications_hallucinated", [])
+        if meds_hallucinated:
+            logger.warning(f"HALLUCINATED MEDICATIONS DETECTED: {meds_hallucinated}")
         
         return MidnightReasonOutput(
             patient_background=patient_bg,

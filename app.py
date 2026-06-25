@@ -224,7 +224,7 @@ class GenerateAppealRequest(BaseModel):
     # All editable fields
     member_name: str
     dob: str
-    age: str
+    age: str = ""  # Optional - calculated from DOB if needed
     gender: str
     member_id: str
     medical_history: str
@@ -1028,6 +1028,11 @@ async def get_extraction_debug(session_id: str):
         "source_text": debug_data.get("source_text", ""),
         "details": debug_data.get("details", []),
         "langfuse_trace_url": langfuse_trace_url,
+        # Trace IDs for fetching Langfuse scores
+        "trace_ids": {
+            **debug_data.get("trace_ids", {}),
+            **midnight_debug_data.get("trace_ids", {})
+        },
         # Midnight Reason Generation debug (midnight_reason_generator)
         "midnight_debug": {
             "input_conditions": midnight_debug_data.get("input_conditions", []),
@@ -1062,6 +1067,83 @@ async def debug_ui():
         </body>
         </html>
         """)
+
+
+@app.get("/appeal/debug/{session_id}/scores", tags=["Appeal"])
+async def get_langfuse_scores(session_id: str):
+    """
+    Fetch evaluator scores from Langfuse for this session's traces.
+    
+    Returns scores for each evaluator (pdf_extractor, hook, midnight_reason_1, etc.)
+    """
+    if not DEBUG_UI_ENABLED:
+        raise HTTPException(status_code=404, detail="Debug UI is disabled")
+    if session_id not in temp_storage:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    session_data = temp_storage[session_id]
+    debug_data = session_data.get("debug_data", {})
+    midnight_debug_data = session_data.get("midnight_debug_data", {})
+    
+    # Collect trace IDs from both sources
+    trace_ids = {
+        **debug_data.get("trace_ids", {}),
+        **midnight_debug_data.get("trace_ids", {})
+    }
+    
+    if not trace_ids:
+        return {"scores": {}, "message": "No trace IDs available - Langfuse may not be enabled"}
+    
+    # Try to fetch scores from Langfuse
+    try:
+        from langfuse import Langfuse
+        langfuse = Langfuse()
+        
+        scores = {}
+        for evaluator_name, trace_id in trace_ids.items():
+            try:
+                # Fetch the trace which includes scores
+                trace = langfuse.fetch_trace(trace_id)
+                logger.info(f"Langfuse trace for {evaluator_name}: type={type(trace)}")
+                
+                # The fetch_trace returns a FetchTraceResponse with .data attribute
+                trace_data = getattr(trace, 'data', trace)
+                
+                trace_scores = getattr(trace_data, 'scores', None)
+                logger.info(f"Trace scores for {evaluator_name}: {len(trace_scores) if trace_scores else 0} scores")
+                
+                if trace_scores:
+                    all_scores = []
+                    
+                    for score in trace_scores:
+                        score_name = getattr(score, 'name', '') if hasattr(score, 'name') else score.get('name', '')
+                        score_value = getattr(score, 'value', None) if hasattr(score, 'value') else score.get('value', None)
+                        score_comment = getattr(score, 'comment', '') if hasattr(score, 'comment') else score.get('comment', '')
+                        
+                        all_scores.append({
+                            "name": score_name,
+                            "value": score_value,
+                            "comment": score_comment or ""
+                        })
+                        logger.info(f"  Score: {score_name}={score_value}, comment_len={len(score_comment or '')}")
+                    
+                    # Sort by comment length descending - LLM evaluator scores have longer comments
+                    all_scores.sort(key=lambda s: len(s.get("comment", "")), reverse=True)
+                    
+                    if evaluator_name not in scores:
+                        scores[evaluator_name] = []
+                    scores[evaluator_name].extend(all_scores)
+                    
+            except Exception as e:
+                logger.warning(f"Failed to fetch scores for {evaluator_name}: {e}", exc_info=True)
+        
+        return {"scores": scores, "trace_ids": trace_ids}
+    
+    except ImportError:
+        return {"scores": {}, "message": "Langfuse SDK not available"}
+    except Exception as e:
+        logger.error(f"Error fetching Langfuse scores: {e}")
+        return {"scores": {}, "message": f"Error: {str(e)}"}
 
 
 # ============================================================================

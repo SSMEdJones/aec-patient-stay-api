@@ -843,10 +843,6 @@
                                     <input type="text" id="dob" name="dob" placeholder="MM/DD/YYYY">
                                 </div>
                                 <div class="form-group">
-                                    <label for="age">Age</label>
-                                    <input type="text" id="age" name="age">
-                                </div>
-                                <div class="form-group">
                                     <label for="gender">Gender</label>
                                     <select id="gender" name="gender">
                                         <option value="male">Male</option>
@@ -980,6 +976,16 @@
     </div>
     
     <script>
+        // Global error handler - log all uncaught errors to console
+        window.onerror = function(message, source, lineno, colno, error) {
+            console.error('[Uncaught Error]', { message, source, lineno, colno, error });
+            return false; // Let the error propagate normally
+        };
+        
+        window.addEventListener('unhandledrejection', function(event) {
+            console.error('[Unhandled Promise Rejection]', event.reason);
+        });
+        
         // Initialize PDF.js worker
         pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
         
@@ -1019,7 +1025,7 @@
         
         // Form fields for preview
         const previewFields = [
-            'member_name', 'dob', 'age', 'gender', 'member_id', 
+            'member_name', 'dob', 'gender', 'member_id', 
             'presenting_symptom', 'pmh_relevant', 'observation_date', 'inpatient_date',
             'reference_number', 'payer_name', 'street_address', 'city', 'state', 
             'zip_code', 'midnight_reason_1', 'midnight_reason_2', 'closing_summary'
@@ -1029,9 +1035,11 @@
         function showMessage(text, type) {
             messageDiv.textContent = text;
             messageDiv.className = `message ${type} active`;
+            // Errors stay visible longer (15s vs 5s for success)
+            const timeout = type === 'error' ? 15000 : 5000;
             setTimeout(() => {
                 messageDiv.className = 'message';
-            }, 5000);
+            }, timeout);
         }
         
         function setStep(step) {
@@ -1254,7 +1262,6 @@
             document.getElementById('session-id').value = data.session_id;
             document.getElementById('member_name').value = data.member_name || '';
             document.getElementById('dob').value = data.dob || '';
-            document.getElementById('age').value = data.age || '';
             document.getElementById('gender').value = data.gender || 'male';
             document.getElementById('member_id').value = data.member_id || '';
             // Populate presenting symptom and PMH relevant fields
@@ -1557,6 +1564,7 @@
                 showMessage('PDF processed successfully! Review and edit the data below.', 'success');
                 
             } catch (error) {
+                console.error('[Upload Error]', error);
                 showMessage(`Error: ${error.message}`, 'error');
                 uploadBtn.disabled = false;
             } finally {
@@ -1607,7 +1615,6 @@
                 ministry: ministrySelect.value,
                 member_name: document.getElementById('member_name').value,
                 dob: document.getElementById('dob').value,
-                age: document.getElementById('age').value,
                 gender: document.getElementById('gender').value,
                 member_id: document.getElementById('member_id').value,
                 medical_history: '',  // PMH removed from UI - not used in letter
@@ -1638,8 +1645,12 @@
                 });
                 
                 if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Generation failed');
+                    const errorData = await response.json();
+                    console.error('[Generate API Error]', errorData);
+                    const errorMsg = typeof errorData.detail === 'string' 
+                        ? errorData.detail 
+                        : JSON.stringify(errorData.detail || errorData);
+                    throw new Error(errorMsg || 'Generation failed');
                 }
                 
                 const data = await response.json();
@@ -1659,7 +1670,9 @@
                 setStep(3);
                 
             } catch (error) {
-                showMessage(`Error: ${error.message}`, 'error');
+                console.error('[Generate Error]', error);
+                const errorMsg = error.message || (typeof error === 'object' ? JSON.stringify(error) : String(error));
+                showMessage(`Error: ${errorMsg}`, 'error');
             } finally {
                 generateBtn.disabled = false;
                 generateLoading.classList.remove('active');
@@ -1899,6 +1912,7 @@
                 }
                 
             } catch (error) {
+                console.error('[Chat Error]', error);
                 chatMessages[chatMessages.length - 1] = { 
                     role: 'assistant', 
                     content: 'Sorry, I encountered an error. Please try again.' 
@@ -1933,6 +1947,7 @@
                 renderChatMessages();
                 
             } catch (error) {
+                console.error('[Feedback Error]', error);
                 chatMessages.push({
                     role: 'assistant',
                     content: '❌ Could not save feedback. Please try again.'
