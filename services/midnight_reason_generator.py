@@ -104,6 +104,8 @@ class PatientStayData:
     place_of_service_raw_code: str = ""  # Raw SERVICE code from PDF (e.g., ERS, OBS, HOSP)
     chief_complaint_short: str = ""  # Brief symptom list: "abdominal pain, nausea, vomiting"
     chief_complaint: str = ""  # Full narrative for letter body
+    presenting_symptom: str = ""  # Exact symptom from Chief Complaint (copy-only, no synthesis)
+    pmh_relevant: str = ""  # Relevant PMH conditions pertinent to this admission
     encounter_status: str = ""
     
     # Clinical data

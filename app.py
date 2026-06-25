@@ -186,7 +186,9 @@ class AppealDataResponse(BaseModel):
     member_id: str = ""
     account_number: str = ""  # Account/encounter number from PDF
     medical_history: str = ""
-    hook: str = ""  # Opening statement hook (chief complaint)
+    hook: str = ""  # Opening statement hook (assembled chief complaint)
+    presenting_symptom: str = ""  # Exact symptom from Chief Complaint
+    pmh_relevant: str = ""  # Pertinent PMH for this admission
     
     # Case info (editable)
     place_of_service: str = ""  # emergency department, hospital, etc.
@@ -226,7 +228,9 @@ class GenerateAppealRequest(BaseModel):
     gender: str
     member_id: str
     medical_history: str
-    hook: str  # Opening statement hook (chief complaint)
+    hook: str  # Opening statement hook (assembled chief complaint)
+    presenting_symptom: str = ""  # Exact symptom from Chief Complaint
+    pmh_relevant: str = ""  # Pertinent PMH for this admission
     
     place_of_service: str = ""
     observation_date: str = ""
@@ -774,6 +778,8 @@ async def upload_pdf_for_appeal(
             account_number=patient_data.account_number or "",
             medical_history=medical_history,
             hook=patient_data.chief_complaint or "evaluation and management",
+            presenting_symptom=getattr(patient_data, 'presenting_symptom', '') or "",
+            pmh_relevant=getattr(patient_data, 'pmh_relevant', '') or "",
             place_of_service=getattr(patient_data, 'place_of_service', '') or place_of_service,
             observation_date=fmt_date(getattr(patient_data, 'observation_date', '')),
             inpatient_date=fmt_date(getattr(patient_data, 'inpatient_date', '')),
@@ -842,6 +848,8 @@ async def generate_appeal_document(request: GenerateAppealRequest):
             member_id=request.member_id,
             medical_history=request.medical_history,
             hook=request.hook,
+            presenting_symptom=request.presenting_symptom,
+            pmh_relevant=request.pmh_relevant,
             place_of_service=request.place_of_service or "Emergency Department",
             street_address=request.street_address,
             city=request.city,

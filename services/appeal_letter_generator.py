@@ -34,7 +34,9 @@ class AppealLetterData:
     gender: str = ""
     member_id: str = ""
     medical_history: str = ""  # PMH abbreviations
-    hook: str = ""  # Opening statement hook (chief complaint)
+    hook: str = ""  # Opening statement hook (assembled chief complaint)
+    presenting_symptom: str = ""  # Exact symptom from Chief Complaint
+    pmh_relevant: str = ""  # Pertinent PMH for this admission
     
     # Payer info
     payer_name: str = ""
@@ -283,6 +285,9 @@ class AppealLetterGenerator:
         if hook:
             hook = hook.rstrip('.,;: ')
         
+        # Build PMHRelevant with " with " prefix if present, otherwise empty
+        pmh_with_prefix = f" with {data.pmh_relevant}" if data.pmh_relevant else ""
+        
         replacements = {
             "[MemberName]": member_name,
             "[DOB]": data.dob,
@@ -292,6 +297,8 @@ class AppealLetterGenerator:
             "[MedicalHistory]": data.medical_history,
             "[Hook]": hook,
             "[Complaint]": hook,  # Backwards compatibility
+            "[PresentingSymptom]": data.presenting_symptom,
+            "[PMHRelevant]": pmh_with_prefix,
             "[PlaceofService]": data.place_of_service or "Hospital",
             "[Street Address]": data.street_address,
             "[City]": data.city,

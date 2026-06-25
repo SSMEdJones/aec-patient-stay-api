@@ -880,9 +880,14 @@
                         <div class="card">
                             <h2>Clinical Information</h2>
                             <div class="form-group full-width">
-                                <label for="hook">Hook (Chief Complaint)</label>
-                                <textarea id="hook" name="hook" class="small"></textarea>
+                                <label for="presenting_symptom">Presenting Symptom (from Chief Complaint)</label>
+                                <textarea id="presenting_symptom" name="presenting_symptom" class="small" placeholder="e.g., chest pain, shortness of breath"></textarea>
                             </div>
+                            <div class="form-group full-width">
+                                <label for="pmh_relevant">Relevant PMH (conditions pertinent to this admission)</label>
+                                <textarea id="pmh_relevant" name="pmh_relevant" class="small" placeholder="e.g., hypertension, diabetes mellitus"></textarea>
+                            </div>
+                            <input type="hidden" id="hook" name="hook">
                         </div>
 
                         
@@ -1015,7 +1020,7 @@
         // Form fields for preview
         const previewFields = [
             'member_name', 'dob', 'age', 'gender', 'member_id', 
-            'hook', 'observation_date', 'inpatient_date',
+            'presenting_symptom', 'pmh_relevant', 'observation_date', 'inpatient_date',
             'reference_number', 'payer_name', 'street_address', 'city', 'state', 
             'zip_code', 'midnight_reason_1', 'midnight_reason_2', 'closing_summary'
         ];
@@ -1128,12 +1133,23 @@
             const age = getFieldValue('age') || '[Age]';
             const gender = getFieldValue('gender') || 'male';
             const memberId = getFieldValue('member_id') || '[Member ID]';
-            let hook = getFieldValue('hook') || '';
-            // Lowercase first letter (inserted mid-sentence: "with complaints of lower back pain")
-            if (hook && hook.length > 0) {
-                hook = hook[0].toLowerCase() + hook.slice(1);
+            
+            // Build hook from presenting_symptom + pmh_relevant
+            let presentingSymptom = getFieldValue('presenting_symptom') || '';
+            let pmhRelevant = getFieldValue('pmh_relevant') || '';
+            let hook = '';
+            if (presentingSymptom) {
+                // Lowercase first letter (inserted mid-sentence)
+                presentingSymptom = presentingSymptom[0].toLowerCase() + presentingSymptom.slice(1);
+                if (pmhRelevant) {
+                    hook = `${presentingSymptom} with ${pmhRelevant}, requiring hospital-level evaluation, treatment, and monitoring`;
+                } else {
+                    hook = `${presentingSymptom}, requiring hospital-level evaluation, treatment, and monitoring`;
+                }
+            } else {
+                hook = '[Presenting Symptom]';
             }
-            hook = hook || '[Hook]';
+            
             const refNumber = getFieldValue('reference_number') || '[Reference #]';
             const payerName = getFieldValue('payer_name') || '[Payer Name]';
             const streetAddress = getFieldValue('street_address') || '[Street Address]';
@@ -1179,7 +1195,7 @@
                     </p>
                     
                     <p>
-                        Your member was admitted inpatient due to ${formatField(hook, '[Conditions]', 'hook')}.
+                        Your member was admitted inpatient due to ${formatField(presentingSymptom ? presentingSymptom[0].toLowerCase() + presentingSymptom.slice(1) : '', '[Presenting Symptom]', 'presenting_symptom')}${pmhRelevant ? ` with ${formatField(pmhRelevant, '[PMH Relevant]', 'pmh_relevant')}` : ''}, requiring hospital-level evaluation, treatment, and monitoring.
                     </p>
                     
                     <p>
@@ -1241,11 +1257,12 @@
             document.getElementById('age').value = data.age || '';
             document.getElementById('gender').value = data.gender || 'male';
             document.getElementById('member_id').value = data.member_id || '';
-            // Lowercase first letter of hook for natural sentence flow
+            // Populate presenting symptom and PMH relevant fields
+            document.getElementById('presenting_symptom').value = data.presenting_symptom || '';
+            document.getElementById('pmh_relevant').value = data.pmh_relevant || '';
+            // Keep hook for backward compatibility
             const hookVal = data.hook || '';
-            document.getElementById('hook').value = hookVal.length > 0 
-                ? hookVal[0].toLowerCase() + hookVal.slice(1) 
-                : '';
+            document.getElementById('hook').value = hookVal;
             document.getElementById('observation_date').value = data.observation_date || '';
             document.getElementById('inpatient_date').value = data.inpatient_date || '';
             document.getElementById('discharge_date').value = data.discharge_date || '';
@@ -1595,6 +1612,8 @@
                 member_id: document.getElementById('member_id').value,
                 medical_history: '',  // PMH removed from UI - not used in letter
                 hook: document.getElementById('hook').value,
+                presenting_symptom: document.getElementById('presenting_symptom').value,
+                pmh_relevant: document.getElementById('pmh_relevant').value,
                 observation_date: document.getElementById('observation_date').value,
                 inpatient_date: document.getElementById('inpatient_date').value,
                 discharge_date: document.getElementById('discharge_date').value,

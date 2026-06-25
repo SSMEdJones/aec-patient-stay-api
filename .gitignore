@@ -1,4 +1,4 @@
-# Environment
+﻿# Environment
 .env
 *.pem
 keys/
@@ -39,3 +39,12 @@ output/
 
 # Test files with patient data
 test_*.py
+scripts/quick_refresh_creds.ps1
+
+# Temp files
+temp*.pdf
+temp*.docx
+anatomy_appeal.docx
+~$*
+~WRL*.tmp
+appeal_templates/~*
