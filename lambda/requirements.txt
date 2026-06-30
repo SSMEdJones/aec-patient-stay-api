@@ -1,0 +1,7 @@
+# Lambda-specific requirements (extends ../requirements.txt)
+
+# Lambda adapter for FastAPI
+mangum>=0.17.0
+
+# Include all base requirements
+-r ../requirements.txt

@@ -1,0 +1,60 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv
+venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test files
+*.test.py
+tests/
+pytest.ini
+
+# Development files
+*.md
+!README.md
+docs/
+
+# Local deployment files (IIS)
+deploy/
+
+# Temp/output files
+temp*.pdf
+temp*.docx
+output/
+logs/
+*.log
+
+# Example files
+examples/
+*.example
+
+# Test data
+check_*.py
+test_*.py
+fetch_*.py
+generate_appeal.py
+
+# Keys (should use AWS Secrets Manager)
+keys/
+
+# Large test files
+patient-stay-deploy.zip
+anatomy_appeal.docx
+epic_apis.html

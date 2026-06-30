@@ -1,0 +1,63 @@
+# SAM CLI Configuration File
+# Deploy with: sam deploy --config-env dev|stg|prod
+
+version = 0.1
+
+[default]
+[default.global.parameters]
+stack_name = "fast-appeal-api"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.validate.parameters]
+lint = true
+
+# ==============================================================================
+# Development Environment
+# ==============================================================================
+[dev]
+[dev.deploy.parameters]
+stack_name = "fast-appeal-api-dev"
+region = "us-east-1"
+confirm_changeset = false
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Environment=dev"
+image_repositories = ["FastAppealFunction=<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/fast-appeal-api"]
+tags = "Environment=dev Application=FastAppeal"
+
+[dev.build.parameters]
+use_container = true
+
+# ==============================================================================
+# Staging Environment
+# ==============================================================================
+[stg]
+[stg.deploy.parameters]
+stack_name = "fast-appeal-api-stg"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Environment=stg"
+image_repositories = ["FastAppealFunction=<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/fast-appeal-api"]
+tags = "Environment=stg Application=FastAppeal"
+
+[stg.build.parameters]
+use_container = true
+
+# ==============================================================================
+# Production Environment
+# ==============================================================================
+[prod]
+[prod.deploy.parameters]
+stack_name = "fast-appeal-api-prod"
+region = "us-east-1"
+confirm_changeset = true
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "Environment=prod"
+image_repositories = ["FastAppealFunction=<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/fast-appeal-api"]
+tags = "Environment=prod Application=FastAppeal"
+
+[prod.build.parameters]
+use_container = true
